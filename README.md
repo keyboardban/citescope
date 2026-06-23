@@ -106,6 +106,10 @@ Then open the URL Streamlit prints. **No keys yet?** Click
 **🧪 Load demo run** in the sidebar to explore the entire dashboard with realistic
 synthetic data and zero API spend.
 
+**Tests:** `pip install -r requirements-dev.txt && pytest -q` covers matching/recall
+variants, truncation metadata, retry/backoff, the Gemini-failure short-circuit, and the
+embedding cache. CI runs them on every push (`.github/workflows/ci.yml`).
+
 > **Model note:** the default is `gemini-2.5-flash` (a reliable grounding model).
 > Model availability depends on your account — pick a current model from the
 > selector if needed. The integration uses the stable `generate_content` +
@@ -121,8 +125,8 @@ synthetic data and zero API spend.
   queries to reconstruct (observed queries, manual queries, or a prompt fallback).
 - **Scraping settings** — scope (top-K / only cited / all / selected URLs),
   crawler type (cheerio / playwright), use-cache toggle.
-- **Analysis settings** — include weak (domain-only) matches or not; similarity
-  method (lexical offline / Gemini embeddings).
+- **Analysis settings** — similarity method (lexical offline / Gemini embeddings).
+- **Batch mode** — a newline-separated list of prompts to run and aggregate.
 
 ---
 
@@ -134,11 +138,14 @@ synthetic data and zero API spend.
   with cited rows flagged.
 - **Scraped page dataset** — url, final/canonical url, title, headings, text,
   markdown, metadata, status.
-- **Citation matching** — per-citation match type, matched rank, unmatched list,
-  `citation_recall@5/10/20/50`, per-tier match rates, strict-vs-weak comparison.
-- **Feature table** — one row per candidate: cited label, rank, four+ similarity
-  proxies, source type, official flag, word/heading counts, freshness, scrape
-  status, match type.
+- **Citation matching** — per-citation match type (strong vs **weak domain-only**),
+  matched rank, unmatched list, three recall variants
+  `strict_recall` / `canonical_recall` / `domain_inclusive_recall @5/10/20/50`,
+  and per-tier match counts. Only strong matches set `cited = 1`.
+- **Feature table** — one row per candidate: cited label (strong only),
+  `weak_domain_match`, rank, **pre-answer** + **post-output** similarity proxies,
+  source type, `institutional_official` + `brand_official_candidate`, word/char
+  counts + truncation metadata, heading count, freshness, scrape status, match type.
 - **Exports** — feature/SERP/matches CSV, full-run JSON, Markdown + HTML report.
 
 ---
@@ -146,7 +153,7 @@ synthetic data and zero API spend.
 ## 7. Visualizations included
 
 - **Pipeline diagram** with live stage counts (Overview).
-- **Citation recall@K** bar chart.
+- **Citation recall@K** grouped bar — strict / canonical / domain-inclusive.
 - **SERP rank box/strip** — where cited sites sit in the reconstruction.
 - **Cited vs non-cited** grouped means + per-feature distribution boxes.
 - **Source-type** stacked bars + per-type cite-rate.
@@ -156,6 +163,13 @@ synthetic data and zero API spend.
 - **Feature heatmap** (cited rows marked, min-max normalized).
 - **Query → candidate → citation Sankey** flow.
 - **Website cards** with inline similarity bars and badges.
+- **Length-vs-similarity** scatter (length-bias check) + **official-signals** bar.
+- **Batch summary** — pooled cited-vs-non-cited medians with Mann-Whitney U
+  p-values and bootstrap CIs, plus recall@K averaged across runs.
+
+The dashboard separates **pre-answer signals** (rank, query similarity — the cleaner,
+non-circular signals) from **post-output overlap** (page/chunk–answer similarity), which
+carries a loud caveat because the answer may be generated from cited sources.
 
 ---
 
@@ -177,15 +191,19 @@ synthetic data and zero API spend.
 
 ## 9. What to improve next
 
-- **Multi-run aggregation** across many prompts → statistically meaningful
-  cited-vs-non-cited effects (logistic regression / feature importances).
-- **Better entity/brand-aware "official" detection** instead of TLD heuristics.
-- **Async/parallel** redirect resolution and scraping for speed.
-- **Embedding cache on disk** + larger batch sizes; pluggable embedding providers.
+Implemented in this iteration: **batch multi-prompt aggregation** with Mann-Whitney U +
+bootstrap CIs, **three recall variants**, **weak/strong match separation**, **pre-answer vs
+post-output** feature split with circularity/length caveats, **brand-official candidate**
+detection, **retry/backoff**, **Gemini-failure short-circuit**, **concurrent redirect
+resolution**, and a **persistent embedding cache**.
+
+Still worth doing:
+- **Logistic regression / feature importances** on the pooled batch dataset.
 - **Compare across AI engines/models** for the same prompt.
 - **SERP feature parity** (people-also-ask, knowledge panels, dates) and
   position-vs-page-fold modeling.
-- **Statistical tests** (Mann-Whitney, bootstrapped CIs) with explicit caveats.
+- **Pluggable embedding providers** + embedding-cache TTL.
+- **NER-based** entity/brand detection to replace the domain-token heuristic.
 
 ---
 

@@ -14,6 +14,7 @@ from ui import components as C
 from ui.state import get_run, init_state, set_run
 from ui.theme import inject_css
 from ui.views import (
+    batch,
     content_visualizer,
     feature_analysis,
     matching,
@@ -43,6 +44,7 @@ VIEWS = {
     "Citation Matching": ("🎯", matching.render),
     "Content Visualizer": ("🔬", content_visualizer.render),
     "Feature Analysis": ("📈", feature_analysis.render),
+    "Batch Mode": ("📚", batch.render),
     "Report / Export": ("📤", report.render),
 }
 

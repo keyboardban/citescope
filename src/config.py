@@ -23,11 +23,12 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"            # raw API responses (audit trail)
 RUNS_DIR = DATA_DIR / "runs"          # one JSON snapshot per completed run
 EXPORTS_DIR = DATA_DIR / "exports"    # generated CSV/JSON/Markdown reports
-DB_PATH = DATA_DIR / "audit.db"       # SQLite: run index + API result cache
+BATCHES_DIR = DATA_DIR / "batches"    # batch-run summaries (multi-prompt)
+DB_PATH = DATA_DIR / "audit.db"       # SQLite: run index + API/embedding cache
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, RAW_DIR, RUNS_DIR, EXPORTS_DIR):
+    for d in (DATA_DIR, RAW_DIR, RUNS_DIR, EXPORTS_DIR, BATCHES_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -90,9 +91,51 @@ MATCH_TIERS = [
     "domain_only",
     "no_match",
 ]
-WEAK_TIERS = {"domain_only"}
+# Tier groupings used by the three recall variants:
+#   strict_recall          -> direct URL-identity matches only
+#   canonical_recall       -> identity + canonical/amp equivalence (these are "strong")
+#   domain_inclusive_recall-> strong + weak domain-only (exploratory)
+STRICT_TIERS = {"exact", "normalized", "final_redirect"}
+STRONG_TIERS = STRICT_TIERS | {"canonical", "amp_canonical"}  # set cited_label = 1
+WEAK_TIERS = {"domain_only"}                                   # never cited by default
+RECALL_MODES = ("strict", "canonical", "domain_inclusive")
 
 SIMILARITY_METHODS = ["lexical (offline)", "gemini embeddings"]
+
+# --------------------------------------------------------------------------- #
+# Robustness / cost controls
+# --------------------------------------------------------------------------- #
+RETRY_COUNT = int(os.getenv("RETRY_COUNT", "3"))
+RETRY_BASE_DELAY = float(os.getenv("RETRY_BASE_DELAY", "1.0"))
+RETRY_MAX_DELAY = float(os.getenv("RETRY_MAX_DELAY", "20.0"))
+
+MAX_SIM_CHARS = 8000          # page text cap before similarity scoring (reported)
+REDIRECT_TIMEOUT = 4.0        # per-redirect resolution timeout (seconds)
+REDIRECT_MAX_WORKERS = 8      # concurrency for redirect resolution
+
+# --------------------------------------------------------------------------- #
+# Caveat text (kept honest, reused across UI + report)
+# --------------------------------------------------------------------------- #
+CAVEAT_POST_OUTPUT = (
+    "Page–answer and chunk–answer similarity are **post-output** overlap metrics. "
+    "They may be partly **circular** because the AI answer may have been generated "
+    "from cited sources. Treat them as semantic-overlap visualizers, not independent "
+    "evidence of source selection."
+)
+CAVEAT_LENGTH = (
+    "Lexical page–answer similarity can correlate with page length — longer pages "
+    "share more vocabulary with a long answer. Prefer chunk-level similarity for "
+    "headline comparisons."
+)
+CAVEAT_RECALL = (
+    "Recall@K measures how many AI citation URLs were recovered in the reconstructed "
+    "SERP within top-K ranks. Unmatched citations are not evidence the model did not "
+    "use them; they only mean the reconstructed SERP did not recover them."
+)
+CAVEAT_BATCH = (
+    "Batch results are observable associations across runs, not causal evidence about "
+    "how the AI selects or cites sources."
+)
 
 
 # --------------------------------------------------------------------------- #

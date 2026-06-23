@@ -53,6 +53,18 @@ def init_db() -> None:
                 is_demo       INTEGER DEFAULT 0,
                 snapshot_path TEXT
             );
+            CREATE TABLE IF NOT EXISTS embeddings (
+                key        TEXT PRIMARY KEY,
+                vector     TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS batches (
+                batch_id      TEXT PRIMARY KEY,
+                created_at    TEXT NOT NULL,
+                n_prompts     INTEGER,
+                n_candidates  INTEGER,
+                snapshot_path TEXT
+            );
             """
         )
 
@@ -85,6 +97,31 @@ def cache_clear() -> int:
 
 
 # --------------------------------------------------------------------------- #
+# Embedding cache (persistent; keyed by text-hash + model + provider)
+# --------------------------------------------------------------------------- #
+def embedding_get(key: str) -> list[float] | None:
+    init_db()
+    with _conn() as con:
+        row = con.execute("SELECT vector FROM embeddings WHERE key = ?", (key,)).fetchone()
+    return json.loads(row["vector"]) if row else None
+
+
+def embedding_set(key: str, vector) -> None:
+    init_db()
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO embeddings (key, vector, created_at) VALUES (?,?,?)",
+            (key, json.dumps(list(vector)), now_iso()),
+        )
+
+
+def embedding_count() -> int:
+    init_db()
+    with _conn() as con:
+        return int(con.execute("SELECT COUNT(*) AS c FROM embeddings").fetchone()["c"])
+
+
+# --------------------------------------------------------------------------- #
 # Raw payload audit trail
 # --------------------------------------------------------------------------- #
 def save_raw(run_id: str, name: str, payload: Any) -> str:
@@ -109,6 +146,9 @@ def save_run(run: dict) -> str:
     scrape = run.get("scrape") or {}
     matching = run.get("matching") or {}
     recall = (matching.get("recall") or {})
+    # recall may be nested {strict:{...}} or flat {"10":...}
+    strict = recall.get("strict") if isinstance(recall.get("strict"), dict) else recall
+    recall_10 = float((strict or {}).get("10") or 0.0)
 
     with _conn() as con:
         con.execute(
@@ -125,7 +165,7 @@ def save_run(run: dict) -> str:
                 len(g.get("citations", []) or []),
                 len(serp.get("candidates", []) or []),
                 sum(1 for p in (scrape.get("pages") or {}).values() if p.get("status") == "success"),
-                float(recall.get("10") or 0.0),
+                recall_10,
                 1 if run.get("is_demo") else 0,
                 str(path),
             ),
@@ -145,6 +185,40 @@ def list_runs(limit: int = 50) -> list[dict]:
     with _conn() as con:
         rows = con.execute(
             "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Batch snapshots (multi-prompt runs)
+# --------------------------------------------------------------------------- #
+def save_batch(batch: dict) -> str:
+    init_db()
+    config.ensure_dirs()
+    bid = batch["batch_id"]
+    path = config.BATCHES_DIR / f"{bid}.json"
+    path.write_text(json.dumps(batch, indent=2, default=str, ensure_ascii=False), "utf-8")
+    with _conn() as con:
+        con.execute(
+            """INSERT OR REPLACE INTO batches
+               (batch_id, created_at, n_prompts, n_candidates, snapshot_path)
+               VALUES (?,?,?,?,?)""",
+            (bid, batch.get("created_at", now_iso()), batch.get("n_prompts", 0),
+             batch.get("n_candidates", 0), str(path)),
+        )
+    return str(path)
+
+
+def load_batch(batch_id: str) -> dict | None:
+    path = config.BATCHES_DIR / f"{batch_id}.json"
+    return json.loads(path.read_text("utf-8")) if path.exists() else None
+
+
+def list_batches(limit: int = 50) -> list[dict]:
+    init_db()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM batches ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
 

@@ -92,6 +92,7 @@ def inject_css() -> None:
         .b-weak {{ background:{c['weak_soft']}; color:#b45309; }}
         .b-src {{ background:{c['primary_soft']}; color:{c['primary']}; }}
         .b-rank {{ background:#eef2ff; color:#3730a3; }}
+        .b-brand {{ background:#ecfeff; color:#0e7490; }}
 
         /* website card */
         .site-card {{ background:{c['card']}; border:1px solid {c['border']}; border-radius:14px;
@@ -116,6 +117,8 @@ def inject_css() -> None:
         /* note / callout */
         .cs-note {{ background:{c['primary_soft']}; border-left:4px solid {c['primary']};
             padding:10px 14px; border-radius:10px; font-size:.82rem; color:#3730a3; margin:6px 0; }}
+        .cs-caveat {{ background:{c['weak_soft']}; border-left:4px solid {c['weak']};
+            padding:10px 14px; border-radius:10px; font-size:.82rem; color:#92400e; margin:6px 0; }}
 
         /* buttons */
         .stButton>button, .stDownloadButton>button {{ border-radius:10px; font-weight:600; }}

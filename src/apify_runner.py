@@ -11,6 +11,7 @@ import math
 from typing import Any, Sequence
 
 from .ids import now_iso
+from .retry import with_retry
 
 
 def _lazy_client(token: str):
@@ -72,7 +73,7 @@ def run_serp(
         "mobileResults": False,
     }
     try:
-        run = client.actor(actor).call(run_input=run_input)
+        run = with_retry(lambda: client.actor(actor).call(run_input=run_input))
     except Exception as exc:
         return {"candidates": [], "items": [], "run_id": None, "dataset_id": None,
                 "actor": actor, "ts": now_iso(), "error": f"{type(exc).__name__}: {exc}"}
@@ -145,7 +146,7 @@ def run_scrape(
         "readableTextCharThreshold": 100,
     }
     try:
-        run = client.actor(actor).call(run_input=run_input)
+        run = with_retry(lambda: client.actor(actor).call(run_input=run_input))
     except Exception as exc:
         return {"pages": [], "items": [], "run_id": None, "dataset_id": None,
                 "actor": actor, "ts": now_iso(), "error": f"{type(exc).__name__}: {exc}"}

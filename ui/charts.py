@@ -283,3 +283,59 @@ def citation_sankey(run: dict, top_n: int = 16) -> go.Figure:
     ))
     fig.update_layout(title="Query → reconstructed candidate → citation status")
     return _style(fig, 420, legend=False)
+
+
+# --------------------------------------------------------------------------- #
+# recall variants + validity charts
+# --------------------------------------------------------------------------- #
+def recall_grouped(recall: dict) -> go.Figure:
+    """Grouped bar: strict / canonical / domain-inclusive recall across K."""
+    modes = [("strict", "strict"), ("canonical", "canonical"),
+             ("domain_inclusive", "domain-incl (weak)")]
+    rows = []
+    for key, label in modes:
+        d = recall.get(key, {}) or {}
+        for k in (5, 10, 20, 50):
+            rows.append({"K": f"@{k}", "mode": label, "recall": float(d.get(str(k), 0.0))})
+    dfp = pd.DataFrame(rows)
+    if dfp.empty:
+        return _style(go.Figure(), 320)
+    fig = px.bar(dfp, x="K", y="recall", color="mode", barmode="group",
+                 color_discrete_map={"strict": COLORS["cited"], "canonical": COLORS["primary"],
+                                     "domain-incl (weak)": COLORS["weak"]})
+    fig.update_yaxes(range=[0, 1.08], tickformat=".0%")
+    fig.update_layout(title="Citation recall@K — strict vs canonical vs domain-inclusive")
+    return _style(fig, 320)
+
+
+def length_vs_sim_scatter(df: pd.DataFrame) -> go.Figure:
+    """Page length vs page-answer similarity — visualizes the length-bias confound."""
+    if df.empty or "word_count" not in df.columns or "page_output_sim" not in df.columns:
+        return _style(go.Figure(), 320)
+    d = _with_group(df.dropna(subset=["word_count", "page_output_sim"]))
+    if d.empty:
+        return _style(go.Figure(), 320)
+    fig = px.scatter(d, x="word_count", y="page_output_sim", color="group",
+                     color_discrete_map=CITED_SEQ, hover_data=["domain"])
+    fig.update_traces(marker=dict(size=10, opacity=0.75))
+    fig.update_layout(title="Page length vs page–answer similarity (length-bias check)")
+    fig.update_xaxes(title="word count")
+    fig.update_yaxes(title="page–answer similarity")
+    return _style(fig, 320)
+
+
+def official_bar(off: dict) -> go.Figure:
+    """Cite-rate for institutional-official vs brand-candidate vs other."""
+    if not off:
+        return _style(go.Figure(), 260)
+    labels = {"institutional_official": "institutional", "brand_official_candidate": "brand candidate", "other": "other"}
+    d = pd.DataFrame([{"group": labels.get(k, k), "cite_rate": v.get("cite_rate", 0.0),
+                       "candidates": v.get("candidates", 0)} for k, v in off.items()])
+    fig = go.Figure(go.Bar(
+        x=d["group"], y=d["cite_rate"], marker_color=COLORS["primary"],
+        text=[f"{v*100:.0f}%" for v in d["cite_rate"]], textposition="outside",
+        customdata=d["candidates"],
+        hovertemplate="%{x}<br>cite-rate %{y:.0%}<br>%{customdata} candidates<extra></extra>"))
+    fig.update_yaxes(range=[0, 1.08], tickformat=".0%")
+    fig.update_layout(title="Cite-rate: official signals (heuristic)")
+    return _style(fig, 280, legend=False)

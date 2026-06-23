@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from src.analysis import summary_metrics
+from src.analysis import _normalize_recall, summary_metrics
 
 from .. import components as C
 from .. import charts
@@ -54,14 +54,14 @@ def render() -> None:
         {"value": m.get("n_citations", 0), "label": "citations", "sub": "distinct URLs"},
         {"value": m.get("n_candidates", 0), "label": "SERP candidates", "sub": "reconstructed"},
         {"value": m.get("n_scraped", 0), "label": "pages scraped"},
-        {"value": C.pct(m.get("recall_10")) if run else "—", "label": "recall@10"},
-        {"value": C.pct(m.get("recall_20")) if run else "—", "label": "recall@20"},
+        {"value": C.pct(m.get("recall_strict_10")) if run else "—", "label": "strict recall@10"},
+        {"value": C.pct(m.get("recall_domain_10")) if run else "—", "label": "domain-incl@10"},
     ])
 
     if run and (run.get("matching") or {}).get("recall"):
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.plotly_chart(charts.recall_bar(run["matching"]["recall"]), width="stretch")
+            st.plotly_chart(charts.recall_grouped(_normalize_recall(run["matching"]["recall"])), width="stretch")
         with col2:
             rc = run["matching"].get("rate_counts") or {}
             st.plotly_chart(charts.match_type_bar(rc), width="stretch")

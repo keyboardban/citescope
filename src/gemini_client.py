@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from typing import Any, Sequence
 
+from .retry import with_retry
+
 
 def _lazy_genai():
     from google import genai
@@ -169,7 +171,8 @@ def run_grounded(
 
     error = None
     try:
-        resp = client.models.generate_content(model=model, contents=prompt, config=config)
+        resp = with_retry(lambda: client.models.generate_content(
+            model=model, contents=prompt, config=config))
     except Exception as exc:  # surface API errors to the UI rather than crashing
         return {
             "output_text": "",
@@ -217,7 +220,7 @@ def embed_texts(client, texts: Sequence[str], model: str = "text-embedding-004")
     if not texts:
         return []
     try:
-        resp = client.models.embed_content(model=model, contents=texts)
+        resp = with_retry(lambda: client.models.embed_content(model=model, contents=texts))
         embs = _first(resp, "embeddings", default=None)
         if embs is not None:
             return [list(_first(e, "values", default=[]) or []) for e in embs]

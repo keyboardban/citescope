@@ -178,7 +178,7 @@ def make_demo_run() -> dict:
     pages = {normalize_url(p["url"]): p for p in pages_list}
 
     cands = unique_candidates(flat)
-    matching = match_all(citations, cands, pages, include_weak=False)
+    matching = match_all(citations, cands, pages)
     matching["unique_candidates"] = cands
 
     sim = SimilarityEngine("lexical")
@@ -189,7 +189,7 @@ def make_demo_run() -> dict:
         "gemini": {"model": "gemini-2.5-flash", "temperature": 0.2, "grounding": True, "system_prompt": None},
         "serp": {"top_k": 20, "country": "th", "language": "en", "selected_queries": [q1, q2]},
         "scrape": {"scope": "top_k", "top_k": 12, "selected_urls": [], "use_cache": True, "crawler_type": "cheerio"},
-        "analysis": {"include_weak": False, "similarity_method": "lexical (offline)", "embedding_model": "text-embedding-004"},
+        "analysis": {"similarity_method": "lexical (offline)", "embedding_model": "text-embedding-004"},
     }
 
     run = {

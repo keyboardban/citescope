@@ -121,7 +121,7 @@ def is_redirect_wrapper(url: str) -> bool:
     return host_hit and marker_hit
 
 
-def resolve_redirect(url: str, timeout: float = 8.0) -> str | None:
+def resolve_redirect(url: str, timeout: float = 4.0) -> str | None:
     """Follow redirects to the final destination URL.
 
     Grounding-chunk URIs are Vertex redirect links; resolving them reveals the

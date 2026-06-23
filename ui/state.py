@@ -61,7 +61,6 @@ def default_inputs() -> dict:
             "crawler_type": config.DEFAULT_CRAWLER_TYPE,
         },
         "analysis": {
-            "include_weak": False,
             "similarity_method": config.SIMILARITY_METHODS[0],
             "embedding_model": config.DEFAULT_EMBED_MODEL,
         },
@@ -98,7 +97,7 @@ def recompute_downstream() -> None:
     if not run or not run.get("gemini") or not run.get("serp"):
         return
     clients = get_clients()
-    matching = stage_match(run["gemini"], run["serp"], run.get("scrape"), inp["analysis"])
+    matching = stage_match(run["gemini"], run["serp"], run.get("scrape"))
     sim = make_sim_engine(
         inp["analysis"]["similarity_method"], clients.get("gemini"),
         inp["analysis"]["embedding_model"],

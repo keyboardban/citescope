@@ -3,11 +3,13 @@
 Each stage is a cache-aware function that can be called on its own (the
 interactive multi-page flow) or chained by `run_full` (the one-click audit).
 Expensive Gemini/Apify calls are cached in SQLite so they are never repeated by
-accident; pass force=True to refresh.
+accident; pass force=True to refresh. Failed/empty results are never cached.
 """
 
 from __future__ import annotations
 
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from . import apify_runner, gemini_client, storage
@@ -15,6 +17,7 @@ from .analysis import (
     correlation_with_citation,
     features_df,
     group_compare,
+    length_sim_correlation,
     official_compare,
     source_breakdown,
     summary_metrics,
@@ -22,6 +25,8 @@ from .analysis import (
 from .config import (
     APIFY_SCRAPER_ACTOR,
     APIFY_SERP_ACTOR,
+    REDIRECT_MAX_WORKERS,
+    REDIRECT_TIMEOUT,
 )
 from .features import build_features
 from .ids import new_run_id, now_iso, stable_hash
@@ -32,33 +37,70 @@ from .url_utils import domain, is_redirect_wrapper, normalize_url, resolve_redir
 ProgressCB = Callable[[str, float], None]
 
 
+class PipelineError(RuntimeError):
+    """Raised to abort the pipeline early (e.g. unusable Gemini run)."""
+
+
 # --------------------------------------------------------------------------- #
-# similarity engine factory
+# similarity engine factory (with persistent embedding cache)
 # --------------------------------------------------------------------------- #
+def _emb_key(text: str, model: str) -> str:
+    return "emb:gemini:" + model + ":" + hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
 def make_sim_engine(method: str, gem_client=None, embed_model: str = "text-embedding-004") -> SimilarityEngine:
     wants_embed = bool(method) and ("embed" in method.lower())
     if wants_embed and gem_client is not None:
         def embed_fn(texts):
-            return gemini_client.embed_texts(gem_client, texts, embed_model)
+            texts = list(texts)
+            missing = list(dict.fromkeys(
+                t for t in texts if storage.embedding_get(_emb_key(t, embed_model)) is None))
+            if missing:
+                vecs = gemini_client.embed_texts(gem_client, missing, embed_model)
+                for t, v in zip(missing, vecs):
+                    if v:
+                        storage.embedding_set(_emb_key(t, embed_model), v)
+            return [storage.embedding_get(_emb_key(t, embed_model)) or [] for t in texts]
         return SimilarityEngine("embedding", embed_fn)
     return SimilarityEngine("lexical")
 
 
 # --------------------------------------------------------------------------- #
-# stage 1 — Gemini grounded run + citation redirect resolution
+# stage 1 — Gemini grounded run + concurrent citation redirect resolution
 # --------------------------------------------------------------------------- #
 def _resolve_citations(trace: dict, use_cache: bool = True) -> dict:
-    for c in trace.get("citations", []):
+    cites = trace.get("citations", [])
+    pending: list[str] = []
+    for c in cites:
         raw = c.get("raw_uri", "")
         if is_redirect_wrapper(raw):
-            key = "redirect:" + raw
-            r = storage.cache_get(key) if use_cache else None
-            if not r:
-                r = resolve_redirect(raw) or raw
-                storage.cache_set(key, r, stage="redirect")
-            c["resolved_url"] = r
+            cached = storage.cache_get("redirect:" + raw) if use_cache else None
+            if cached:
+                c["resolved_url"] = cached
+            else:
+                c["resolved_url"] = None
+                pending.append(raw)
         else:
             c["resolved_url"] = raw
+
+    if pending:
+        uniq = list(dict.fromkeys(pending))
+
+        def work(raw: str):
+            return raw, (resolve_redirect(raw, timeout=REDIRECT_TIMEOUT) or raw)
+
+        results: dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=min(REDIRECT_MAX_WORKERS, len(uniq))) as ex:
+            for raw, resolved in ex.map(work, uniq):
+                results[raw] = resolved
+                storage.cache_set("redirect:" + raw, resolved, stage="redirect")
+        for c in cites:
+            if c.get("resolved_url") is None:
+                c["resolved_url"] = results.get(c.get("raw_uri", ""), c.get("raw_uri", ""))
+
+    for c in cites:
+        if not c.get("resolved_url"):
+            c["resolved_url"] = c.get("raw_uri", "")
         c["domain"] = domain(c["resolved_url"])
     return trace
 
@@ -91,6 +133,11 @@ def stage_gemini(gem_client, inputs: dict, run_id: str = "", use_cache: bool = T
     if not trace.get("error"):  # never cache a failed/empty run
         storage.cache_set(key, trace, stage="gemini")
     return trace
+
+
+def gemini_is_usable(gemini: dict) -> bool:
+    """A Gemini run is usable if it produced any output, citations, or queries."""
+    return bool(gemini.get("output_text")) or bool(gemini.get("citations")) or bool(gemini.get("search_queries"))
 
 
 # --------------------------------------------------------------------------- #
@@ -191,10 +238,10 @@ def stage_scrape(apify_client, urls: list[str], scrape_inputs: dict, run_id: str
 # --------------------------------------------------------------------------- #
 # stage 4 — matching, stage 5 — features, stage 6 — analysis
 # --------------------------------------------------------------------------- #
-def stage_match(gemini: dict, serp: dict, scrape: dict | None, analysis_inputs: dict) -> dict:
+def stage_match(gemini: dict, serp: dict, scrape: dict | None) -> dict:
     cands = unique_candidates(serp.get("candidates", []))
     pages = (scrape or {}).get("pages", {})
-    res = match_all(gemini.get("citations", []), cands, pages, analysis_inputs.get("include_weak", False))
+    res = match_all(gemini.get("citations", []), cands, pages)
     res["unique_candidates"] = cands
     return res
 
@@ -214,6 +261,7 @@ def stage_analyze(run: dict) -> dict:
         "source_breakdown": source_breakdown(df).to_dict(orient="records"),
         "official": official_compare(df),
         "correlation": correlation_with_citation(df).to_dict(orient="records"),
+        "length_sim_corr": length_sim_correlation(df),
     }
 
 
@@ -230,6 +278,16 @@ def run_full(clients: dict, inputs: dict, progress: ProgressCB | None = None,
     p("Querying Gemini (grounded)…", 0.05)
     gemini = stage_gemini(clients.get("gemini"), inputs, run_id, use_cache, force)
 
+    # Abort BEFORE spending Apify credits if Gemini produced nothing usable.
+    if not gemini_is_usable(gemini):
+        storage.save_raw(run_id, "failed_gemini", {k: v for k, v in gemini.items() if k != "raw"})
+        raise PipelineError(
+            "Gemini produced no usable output, citations, or queries"
+            + (f" (error: {gemini.get('error')})" if gemini.get("error") else "")
+            + ". Aborted before the Apify SERP/scrape stages to avoid spending credits. "
+            "You can add fallback queries manually in SERP Reconstruction."
+        )
+
     observed = [q["query"] for q in gemini.get("search_queries", [])]
     queries = inputs["serp"].get("selected_queries") or observed or [inputs["prompt"]]
     used_fallback = not observed and not inputs["serp"].get("selected_queries")
@@ -238,7 +296,7 @@ def run_full(clients: dict, inputs: dict, progress: ProgressCB | None = None,
     serp = stage_serp(clients.get("apify"), queries, inputs["serp"], run_id, use_cache, force)
 
     cands = unique_candidates(serp.get("candidates", []))
-    pre = match_all(gemini.get("citations", []), cands, {}, inputs["analysis"].get("include_weak", False))
+    pre = match_all(gemini.get("citations", []), cands, {})
     urls = select_scrape_urls(
         inputs["scrape"].get("scope", "top_k"), cands, pre["cited_candidate_ids"],
         inputs["scrape"].get("top_k", 12), inputs["scrape"].get("selected_urls"),
@@ -249,7 +307,7 @@ def run_full(clients: dict, inputs: dict, progress: ProgressCB | None = None,
                           use_cache, force) if urls else {"pages": {}, "apify": {}, "cached": True}
 
     p("Matching citations…", 0.8)
-    matching = stage_match(gemini, serp, scrape, inputs["analysis"])
+    matching = stage_match(gemini, serp, scrape)
 
     p("Extracting features…", 0.9)
     sim = make_sim_engine(inputs["analysis"].get("similarity_method", "lexical"),

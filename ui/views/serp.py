@@ -28,6 +28,13 @@ def render() -> None:
     s = inputs["serp"]
 
     observed = [q["query"] for q in run["gemini"].get("search_queries", []) or []]
+    g = run["gemini"]
+    if g.get("error") or not (g.get("output_text") or observed or g.get("citations")):
+        st.warning(
+            "The Gemini run produced no usable output or queries"
+            + (f" — {g['error']}" if g.get("error") else "")
+            + ". You can still add **fallback queries** manually below to reconstruct a SERP."
+        )
     st.session_state.setdefault("manual_queries", [])
 
     cc1, cc2 = st.columns([3, 1])

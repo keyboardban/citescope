@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src import config
 from src.chunking import extract_headings
-from src.features import NUMERIC_FEATURES
 from src.url_utils import normalize_url
 
 from .. import charts
@@ -50,16 +50,22 @@ def render() -> None:
         st.markdown(f"### {row.get('title') or row.get('domain')}")
         st.caption(row["url"])
         badges = C.cited_badge(bool(row.get("cited"))) + " " + C.badge(row.get("source_type", "unknown"), "src")
-        if row.get("official_source"):
+        if row.get("institutional_official") or row.get("official_source"):
             badges += " " + C.badge("official", "src")
+        if row.get("brand_official_candidate"):
+            badges += " " + C.badge("official?", "brand")
         if row.get("cited"):
             badges += " " + C.match_badge(row.get("match_type", "no_match"))
+        elif row.get("weak_domain_match"):
+            badges += " " + C.badge("weak domain", "weak")
         badges += " " + C.badge(f"#{row.get('serp_rank','?')} rank", "rank")
         st.markdown(badges, unsafe_allow_html=True)
         if page:
+            trunc = " · ✂️ truncated for similarity" if row.get("truncated") else ""
             st.caption(
-                f"words: {row.get('word_count') or '—'} · headings: {row.get('heading_count') or '—'} · "
-                f"published: {page.get('published_date') or '—'} · lang: {page.get('language') or '—'} · "
+                f"words: {row.get('word_count') or '—'} · chars used "
+                f"{row.get('used_char_count') or '—'}/{row.get('original_char_count') or '—'}{trunc} · "
+                f"headings: {row.get('heading_count') or '—'} · published: {page.get('published_date') or '—'} · "
                 f"canonical: {page.get('canonical_url') or '—'}"
             )
     with right:
@@ -88,6 +94,8 @@ def render() -> None:
     target = st.radio("Compare chunks to", ["AI answer", "search query"], horizontal=True)
     key = "output_sim" if target == "AI answer" else "query_sim"
     label = "answer" if target == "AI answer" else "query"
+    if target == "AI answer":
+        C.caveat_box(config.CAVEAT_POST_OUTPUT)
     st.plotly_chart(charts.chunk_relevance(chunks, key, label), width="stretch")
     C.proxy_note("High overlap suggests the passage is topically related to the AI output. It is NOT "
                  "evidence the model read this passage.")

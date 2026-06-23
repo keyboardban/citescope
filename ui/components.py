@@ -67,7 +67,7 @@ def metric_cards(items: list[dict]) -> None:
 # --------------------------------------------------------------------------- #
 def badge(text: str, kind: str = "src") -> str:
     cls = {"cited": "b-cited", "noncited": "b-noncited", "weak": "b-weak",
-           "src": "b-src", "rank": "b-rank"}.get(kind, "b-src")
+           "src": "b-src", "rank": "b-rank", "brand": "b-brand"}.get(kind, "b-src")
     return f'<span class="cs-badge {cls}">{_esc(text)}</span>'
 
 
@@ -92,6 +92,11 @@ def limitation_box(long: bool = False) -> None:
 
 def proxy_note(text: str) -> None:
     st.markdown(f'<div class="cs-note">{_esc(text)}</div>', unsafe_allow_html=True)
+
+
+def caveat_box(text: str) -> None:
+    """Loud amber caveat (renders markdown via st.warning)."""
+    st.warning(text, icon="⚠️")
 
 
 def empty_state(message: str, icon: str = "🧭") -> None:
@@ -150,10 +155,14 @@ def site_card(row: dict) -> None:
     cited = bool(row.get("cited"))
     klass = "cited" if cited else "noncited"
     badges = cited_badge(cited) + " " + badge(row.get("source_type", "unknown"), "src")
-    if row.get("official_source"):
+    if row.get("institutional_official") or row.get("official_source"):
         badges += " " + badge("official", "src")
+    if row.get("brand_official_candidate"):
+        badges += " " + badge("official?", "brand")
     if cited:
         badges += " " + match_badge(row.get("match_type", "no_match"))
+    elif row.get("weak_domain_match"):
+        badges += " " + badge("weak domain", "weak")
     status = "✓ scraped" if row.get("scrape_success") else "✗ not scraped"
 
     st.markdown(
