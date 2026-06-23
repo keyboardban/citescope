@@ -1,0 +1,20 @@
+# secrets
+.env
+.streamlit/secrets.toml
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# data artifacts (keep the folders, not the contents)
+data/**
+!data/.gitkeep
+
+# os
+.DS_Store
+
+# local tooling
+.claude/settings.local.json

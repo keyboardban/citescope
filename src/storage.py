@@ -1,0 +1,158 @@
+"""Local persistence: a SQLite index + cache, plus JSON run snapshots on disk.
+
+Design:
+- SQLite (`data/audit.db`) holds a lightweight run index and an API result cache
+  so expensive Gemini/Apify calls are never repeated by accident.
+- Full run state is also written as a JSON snapshot under `data/runs/` (easy to
+  inspect, diff, and reload). Raw API payloads are preserved under `data/raw/`.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+from . import config
+from .ids import now_iso
+
+
+@contextmanager
+def _conn() -> Iterator[sqlite3.Connection]:
+    config.ensure_dirs()
+    con = sqlite3.connect(config.DB_PATH)
+    con.row_factory = sqlite3.Row
+    try:
+        yield con
+        con.commit()
+    finally:
+        con.close()
+
+
+def init_db() -> None:
+    with _conn() as con:
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS cache (
+                key        TEXT PRIMARY KEY,
+                stage      TEXT,
+                value      TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id        TEXT PRIMARY KEY,
+                created_at    TEXT NOT NULL,
+                prompt        TEXT,
+                model         TEXT,
+                n_queries     INTEGER,
+                n_citations   INTEGER,
+                n_candidates  INTEGER,
+                n_scraped     INTEGER,
+                recall_10     REAL,
+                is_demo       INTEGER DEFAULT 0,
+                snapshot_path TEXT
+            );
+            """
+        )
+
+
+# --------------------------------------------------------------------------- #
+# API result cache
+# --------------------------------------------------------------------------- #
+def cache_get(key: str) -> Any | None:
+    init_db()
+    with _conn() as con:
+        row = con.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+    return json.loads(row["value"]) if row else None
+
+
+def cache_set(key: str, value: Any, stage: str = "") -> None:
+    init_db()
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO cache (key, stage, value, created_at) VALUES (?,?,?,?)",
+            (key, stage, json.dumps(value, default=str, ensure_ascii=False), now_iso()),
+        )
+
+
+def cache_clear() -> int:
+    init_db()
+    with _conn() as con:
+        n = con.execute("SELECT COUNT(*) AS c FROM cache").fetchone()["c"]
+        con.execute("DELETE FROM cache")
+    return int(n)
+
+
+# --------------------------------------------------------------------------- #
+# Raw payload audit trail
+# --------------------------------------------------------------------------- #
+def save_raw(run_id: str, name: str, payload: Any) -> str:
+    config.ensure_dirs()
+    path = config.RAW_DIR / f"{run_id}__{name}.json"
+    path.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False), "utf-8")
+    return str(path)
+
+
+# --------------------------------------------------------------------------- #
+# Run snapshots
+# --------------------------------------------------------------------------- #
+def save_run(run: dict) -> str:
+    """Persist a full run snapshot and index it in SQLite."""
+    init_db()
+    run_id = run["run_id"]
+    path = config.RUNS_DIR / f"{run_id}.json"
+    path.write_text(json.dumps(run, indent=2, default=str, ensure_ascii=False), "utf-8")
+
+    g = run.get("gemini") or {}
+    serp = run.get("serp") or {}
+    scrape = run.get("scrape") or {}
+    matching = run.get("matching") or {}
+    recall = (matching.get("recall") or {})
+
+    with _conn() as con:
+        con.execute(
+            """INSERT OR REPLACE INTO runs
+               (run_id, created_at, prompt, model, n_queries, n_citations,
+                n_candidates, n_scraped, recall_10, is_demo, snapshot_path)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                run_id,
+                run.get("created_at", now_iso()),
+                (run.get("inputs", {}).get("prompt") or "")[:500],
+                run.get("inputs", {}).get("gemini", {}).get("model"),
+                len(g.get("search_queries", []) or []),
+                len(g.get("citations", []) or []),
+                len(serp.get("candidates", []) or []),
+                sum(1 for p in (scrape.get("pages") or {}).values() if p.get("status") == "success"),
+                float(recall.get("10") or 0.0),
+                1 if run.get("is_demo") else 0,
+                str(path),
+            ),
+        )
+    return str(path)
+
+
+def load_run(run_id: str) -> dict | None:
+    path = config.RUNS_DIR / f"{run_id}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text("utf-8"))
+
+
+def list_runs(limit: int = 50) -> list[dict]:
+    init_db()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def write_export(filename: str, content: str | bytes) -> str:
+    config.ensure_dirs()
+    path = config.EXPORTS_DIR / filename
+    mode = "wb" if isinstance(content, bytes) else "w"
+    with open(path, mode) as fh:
+        fh.write(content)
+    return str(path)

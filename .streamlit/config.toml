@@ -1,0 +1,17 @@
+# Streamlit theme for the AI Search Citation Audit dashboard.
+# A clean, modern research-tool palette (indigo accent on a soft light canvas).
+
+[theme]
+base = "light"
+primaryColor = "#4f46e5"            # indigo-600 accent
+backgroundColor = "#f7f8fc"         # soft off-white canvas
+secondaryBackgroundColor = "#ffffff" # cards / panels
+textColor = "#1e2330"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
+
+[browser]
+gatherUsageStats = false

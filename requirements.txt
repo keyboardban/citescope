@@ -1,0 +1,12 @@
+# AI Search Citation Audit — dependencies
+# Python 3.10+ (tested informally on 3.14)
+
+streamlit>=1.40
+google-genai>=1.10        # Gemini API + Google Search Grounding (from google import genai)
+apify-client>=1.7         # Apify SERP reconstruction + content crawler
+pandas>=2.1
+numpy>=1.26
+plotly>=5.20              # all dashboard visualizations
+tldextract>=5.1           # registrable-domain extraction (public-suffix aware)
+python-dotenv>=1.0        # load API keys from .env
+requests>=2.31            # redirect resolution for grounding URLs
