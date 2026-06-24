@@ -11,7 +11,7 @@ from .features import build_features
 from .matching import match_all, unique_candidates
 from .pipeline import stage_analyze
 from .similarity import SimilarityEngine
-from .ids import new_run_id, now_iso
+from .ids import new_run_id, now_iso, short_id
 from .url_utils import domain, normalize_url
 
 PROMPT = "What are the best tailors in Bangkok for custom suits?"
@@ -209,3 +209,88 @@ def make_demo_run() -> dict:
     }
     run["analysis"] = stage_analyze(run)
     return run
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic Topic Study (offline) — explore Topic Studies mode without keys.
+# Fabricated to illustrate plausible patterns (official/brand + top ranks cited).
+# --------------------------------------------------------------------------- #
+_TOPIC_DOMAINS = {
+    "Healthcare / Skincare": [
+        ("fda.gov", "government", True, False), ("nih.gov", "government", True, False),
+        ("healthline.com", "news", False, False), ("byrdie.com", "blog", False, False),
+        ("reddit.com", "forum", False, False), ("pantip.com", "forum", False, False),
+        ("wikipedia.org", "reference", False, False), ("cerave.com", "unknown", False, True),
+        ("eucerin.com", "unknown", False, True), ("watsons.co.th", "ecommerce", False, False),
+    ],
+    "Automotive": [
+        ("dlt.go.th", "government", True, False), ("toyota.co.th", "unknown", False, True),
+        ("byd.com", "unknown", False, True), ("autolifethailand.com", "news", False, False),
+        ("headlightmag.com", "news", False, False), ("caranddriver.com", "news", False, False),
+        ("pantip.com", "forum", False, False), ("reddit.com", "forum", False, False),
+        ("one2car.com", "ecommerce", False, False), ("youtube.com", "video", False, False),
+    ],
+    "Real Estate": [
+        ("dol.go.th", "government", True, False), ("sansiri.com", "unknown", False, True),
+        ("ananda.co.th", "unknown", False, True), ("ddproperty.com", "ecommerce", False, False),
+        ("hipflat.co.th", "ecommerce", False, False), ("bangkokpost.com", "news", False, False),
+        ("thinkofliving.com", "blog", False, False), ("pantip.com", "forum", False, False),
+        ("reddit.com", "forum", False, False), ("propwise.co", "review", False, False),
+    ],
+}
+
+
+def _demo_row(rid, topic, item, rank, dom, stype, inst, brand, cited, ti, pi):
+    jit = rank * 0.001 + ti * 0.002 + pi * 0.0015
+    pq = round(0.16 + (0.22 if cited else 0.0) + max(0, (6 - rank)) * 0.012 + jit, 3)
+    po = round(0.15 + (0.30 if cited else 0.0) + 0.003 * rank + jit, 3)
+    wc = 500 + rank * 40 + (250 if cited else 0) + pi * 20
+    return {
+        "candidate_id": short_id(f"{rid}:{dom}:{rank}"),
+        "url": f"https://{dom}/p{rank}", "domain": dom, "root_domain": dom, "title": dom,
+        "cited": cited, "weak_domain_match": False,
+        "match_type": "normalized" if cited else "no_match", "strong_match": bool(cited),
+        "serp_rank": rank, "source_type": stype,
+        "institutional_official": inst, "official_source": inst, "brand_official_candidate": brand,
+        "scrape_success": True,
+        "title_query_sim": round(pq * 0.9 + 0.03, 3), "snippet_query_sim": round(pq * 0.8, 3),
+        "page_query_sim": pq, "max_chunk_query_sim": round(pq + 0.05, 3),
+        "page_output_sim": po, "max_chunk_output_sim": round(po + 0.03, 3),
+        "word_count": wc, "char_count": wc * 6, "original_char_count": wc * 6,
+        "used_char_count": min(wc * 6, 8000), "truncated": wc * 6 > 8000,
+        "heading_count": 3 + (rank % 4), "freshness_days": float(20 + rank * 18 + pi * 5 - cited * 8),
+        "run_id": rid, "topic": topic, "intent": item["intent"], "id": item["id"], "prompt": item["prompt"],
+    }
+
+
+def make_demo_topic_study(per_topic: int = 4) -> dict:
+    from . import batch, question_sets
+    runs, combined, per_prompt, items = [], [], [], []
+    for ti, (topic, doms) in enumerate(_TOPIC_DOMAINS.items()):
+        for pi, item in enumerate(question_sets.TOPIC_SETS[topic][:per_topic]):
+            rid = f"DEMO-{topic.split()[0][:4]}-{pi}"
+            items.append({**item, "topic": topic})
+            cited_set = {1, 2}
+            for rank in range(3, 6):  # add one official/brand page in ranks 3-5
+                _, _, inst, brand = doms[(pi + rank - 1) % len(doms)]
+                if inst or brand:
+                    cited_set.add(rank)
+                    break
+            for rank in range(1, 9):
+                dom, stype, inst, brand = doms[(pi + rank - 1) % len(doms)]
+                combined.append(_demo_row(rid, topic, item, rank, dom, stype, inst, brand,
+                                          1 if rank in cited_set else 0, ti, pi))
+            citations = len(cited_set) + 1  # one unmatched citation
+            strict = {str(k): round(sum(1 for r in cited_set if r <= k) / citations, 4) for k in (5, 10, 20, 50)}
+            recall = {"strict": strict, "canonical": strict,
+                      "domain_inclusive": {k: round(min(1.0, v + 0.06), 4) for k, v in strict.items()}}
+            runs.append({"run_id": rid, "matching": {"recall": recall, "n_citations": citations}})
+            per_prompt.append({**item, "topic": topic, "run_id": rid, "error": None,
+                               "n_candidates": 8, "n_citations": citations, "n_scraped": 8,
+                               "recall_strict_10": strict["10"]})
+    return {
+        "batch_id": "DEMO-" + new_run_id(), "created_at": now_iso(), "is_demo": True,
+        "n_prompts": len(runs), "n_candidates": len(combined), "items": items,
+        "prompts": [it["prompt"] for it in items], "run_ids": [r["run_id"] for r in runs],
+        "per_prompt": per_prompt, "features": combined, "aggregate": batch.aggregate(runs, combined),
+    }

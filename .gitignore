@@ -18,3 +18,7 @@ data/**
 
 # local tooling
 .claude/settings.local.json
+.vscode/
+
+# office temp/lock files
+~$*

@@ -324,6 +324,50 @@ def length_vs_sim_scatter(df: pd.DataFrame) -> go.Figure:
     return _style(fig, 320)
 
 
+_TOPIC_PALETTE = ["#4f46e5", "#0891b2", "#16a34a", "#db2777", "#ca8a04", "#7c3aed"]
+
+
+def topic_compare(by_topic: dict, metric: str = "cite_rate", title: str | None = None) -> go.Figure:
+    """One bar per topic for a chosen rate metric (cite_rate or strict recall@10)."""
+    rows = []
+    for t, info in by_topic.items():
+        if metric == "cite_rate":
+            v = info.get("cite_rate", 0.0)
+        elif metric == "recall_strict_10":
+            v = info.get("recall", {}).get("strict", {}).get("10", 0.0)
+        else:
+            v = 0.0
+        rows.append({"topic": t, "value": v})
+    d = pd.DataFrame(rows)
+    if d.empty:
+        return _style(go.Figure(), 300)
+    fig = go.Figure(go.Bar(
+        x=d["topic"], y=d["value"],
+        marker_color=[_TOPIC_PALETTE[i % len(_TOPIC_PALETTE)] for i in range(len(d))],
+        text=[f"{v*100:.0f}%" for v in d["value"]], textposition="outside"))
+    fig.update_yaxes(range=[0, 1.08], tickformat=".0%")
+    fig.update_layout(title=title or "By topic")
+    return _style(fig, 300, legend=False)
+
+
+def topic_feature_compare(by_topic: dict, key: str, label: str) -> go.Figure:
+    """Cited vs non-cited median of one feature, grouped per topic."""
+    rows = []
+    for t, info in by_topic.items():
+        gs = {g["key"]: g for g in info.get("group_stats", [])}
+        r = gs.get(key, {})
+        rows.append({"topic": t, "group": "cited", "median": r.get("cited_median") or 0})
+        rows.append({"topic": t, "group": "non-cited", "median": r.get("noncited_median") or 0})
+    d = pd.DataFrame(rows)
+    if d.empty:
+        return _style(go.Figure(), 320)
+    fig = px.bar(d, x="topic", y="median", color="group", barmode="group",
+                 color_discrete_map=CITED_SEQ, text_auto=".2f")
+    fig.update_layout(title=f"{label} — cited vs non-cited, by topic")
+    fig.update_xaxes(title="")
+    return _style(fig, 320)
+
+
 def official_bar(off: dict) -> go.Figure:
     """Cite-rate for institutional-official vs brand-candidate vs other."""
     if not off:

@@ -228,6 +228,30 @@ def batch_markdown_report(batch: dict) -> str:
     if not sb.empty:
         a("## Source-type breakdown (pooled)\n")
         a(_md_table(sb))
+
+    patterns = agg.get("patterns") or []
+    if patterns:
+        a("## Observable patterns\n")
+        for p in patterns:
+            a(f"- {p}")
+        a("")
+
+    by_topic = agg.get("by_topic") or {}
+    if by_topic:
+        a("## By topic\n")
+        a(_md_table(pd.DataFrame([{
+            "topic": t,
+            "candidates": info.get("sample_sizes", {}).get("n_candidates", 0),
+            "cited": info.get("sample_sizes", {}).get("n_cited", 0),
+            "cite_rate": info.get("cite_rate", 0.0),
+            "strict_recall@10": info.get("recall", {}).get("strict", {}).get("10", 0.0),
+        } for t, info in by_topic.items()])))
+
+    by_intent = agg.get("by_intent") or {}
+    if by_intent:
+        a("## By intent\n")
+        a(_md_table(pd.DataFrame([{"intent": k, **v} for k, v in by_intent.items()])))
+
     a("## Limitations\n")
     a("- Observable associations across runs, not causal evidence.\n"
       "- Reconstructed SERP ≠ the AI's internal results; post-output similarity may be circular.\n")

@@ -23,6 +23,7 @@ from ui.views import (
     run_search,
     scraping,
     serp,
+    topics,
 )
 
 st.set_page_config(
@@ -44,6 +45,7 @@ VIEWS = {
     "Citation Matching": ("🎯", matching.render),
     "Content Visualizer": ("🔬", content_visualizer.render),
     "Feature Analysis": ("📈", feature_analysis.render),
+    "Topic Studies": ("🔭", topics.render),
     "Batch Mode": ("📚", batch.render),
     "Report / Export": ("📤", report.render),
 }
