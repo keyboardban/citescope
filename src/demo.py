@@ -294,3 +294,102 @@ def make_demo_topic_study(per_topic: int = 4) -> dict:
         "prompts": [it["prompt"] for it in items], "run_ids": [r["run_id"] for r in runs],
         "per_prompt": per_prompt, "features": combined, "aggregate": batch.aggregate(runs, combined),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic Bright Data (ChatGPT) export — for offline exploration + tests.
+# Includes cited/more-only mixes, a cited↔search_sources duplicate (cited wins),
+# and a tracking-param duplicate (dedup by normalized URL).
+# --------------------------------------------------------------------------- #
+SAMPLE_BRIGHTDATA = [
+    {
+        "url": "https://chatgpt.com/?q=Top%20hotels%20in%20New%20York",
+        "prompt": "Top hotels in New York",
+        "answer_text_markdown": ("New York has many highly rated hotels. Among the most frequently "
+                                 "recommended are The Plaza, the Marriott Marquis in Times Square, and "
+                                 "boutique options reviewed by travel guides. Booking.com and major travel "
+                                 "publications list strong options across price ranges."),
+        "web_search_query": ["best hotels in New York", "top rated NYC hotels"],
+        "web_search_triggered": True,
+        "model": "gpt-4o",
+        "timestamp": "2026-06-20T10:00:00Z",
+        "citations": [
+            {"url": "https://www.booking.com/city/us/new-york.html", "title": "Hotels in New York | Booking.com",
+             "description": "Compare hotels in New York.", "domain": "booking.com", "cited": True},
+            {"url": "https://www.nytimes.com/guides/nyc-hotels", "title": "Where to Stay in NYC - The New York Times",
+             "description": "Editorial hotel guide.", "domain": "nytimes.com", "cited": True},
+            {"url": "https://www.tripadvisor.com/Hotels-g60763-New_York_City.html", "title": "NYC Hotels - Tripadvisor",
+             "description": "Traveler reviews.", "domain": "tripadvisor.com", "cited": False},
+            {"url": "https://www.reddit.com/r/nyc/comments/abc/best_hotels", "title": "Best hotels? r/nyc",
+             "description": "Reddit thread.", "domain": "reddit.com", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.hotels.com/de1234/new-york", "title": "New York Hotels - Hotels.com", "domain": "hotels.com"},
+            {"url": "https://www.tripadvisor.com/Hotels-g60763-New_York_City.html?utm_source=chatgpt", "title": "NYC Hotels"},
+        ],
+        "search_sources": [
+            {"url": "https://www.booking.com/city/us/new-york.html", "title": "Booking NYC", "rank": 1},
+            {"url": "https://www.marriott.com/new-york", "title": "Marriott New York", "rank": 2, "date_published": "2026-01-10"},
+        ],
+        "links_attached": [],
+        "response_raw": {},
+    },
+    {
+        "url": "https://chatgpt.com/?q=EV%20incentives%20Thailand",
+        "prompt": "What government incentives exist for electric vehicles in Thailand?",
+        "answer_text_markdown": ("Thailand offers EV incentives including tax reductions and subsidies under "
+                                 "government EV programs. Automakers such as Toyota and BYD participate, and "
+                                 "official agencies publish the current incentive details."),
+        "web_search_query": "Thailand EV incentives 2026",
+        "web_search_triggered": True,
+        "model": "gpt-4o",
+        "timestamp": "2026-06-21T09:00:00Z",
+        "citations": [
+            {"url": "https://www.dlt.go.th/ev-incentives", "title": "EV incentives - Department of Land Transport",
+             "description": "Official incentive details.", "domain": "dlt.go.th", "cited": True},
+            {"url": "https://www.caranddriver.com/thailand-ev", "title": "Thailand EV guide - Car and Driver",
+             "description": "EV overview.", "domain": "caranddriver.com", "cited": True},
+            {"url": "https://pantip.com/topic/ev-th", "title": "EV subsidy discussion - Pantip", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.byd.com/th", "title": "BYD Thailand", "domain": "byd.com"},
+            {"url": "https://www.headlightmag.com/ev-incentive", "title": "EV incentive news"},
+        ],
+        "search_sources": [],
+        "links_attached": ["https://www.dlt.go.th/ev-incentives"],
+        "response_raw": {},
+    },
+    {
+        "url": "https://chatgpt.com/?q=Buying%20a%20condo%20in%20Bangkok",
+        "prompt": "What should I check before buying a condominium in Bangkok?",
+        "answer_text": ("Before buying a Bangkok condo, check the developer reputation, the title and land "
+                        "documents, foreign ownership quota, common fees, and the project location. Property "
+                        "portals and the land department provide official document verification."),
+        "web_search_query": [],
+        "web_search_triggered": True,
+        "model": "gpt-4o",
+        "timestamp": "2026-06-22T08:00:00Z",
+        "citations": [
+            {"url": "https://www.ddproperty.com/buy-condo-bangkok", "title": "Buying a condo - DDproperty",
+             "description": "Buyer guide.", "domain": "ddproperty.com", "cited": True},
+            {"url": "https://www.bangkokpost.com/property/condo-guide", "title": "Condo guide - Bangkok Post", "cited": True},
+            {"url": "https://www.reddit.com/r/Thailand/comments/xyz/condo", "title": "Condo advice r/Thailand", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.sansiri.com/condominium", "title": "Sansiri Condominiums", "domain": "sansiri.com"},
+            {"url": "https://www.hipflat.co.th/en/", "title": "Hipflat property", "domain": "hipflat.co.th"},
+        ],
+        "search_sources": [
+            {"url": "https://www.dol.go.th/verify", "title": "Land document verification", "rank": 1},
+        ],
+        "links_attached": [],
+        "response_raw": {},
+    },
+]
+
+
+def make_demo_brightdata() -> dict:
+    """Parse the synthetic Bright Data sample into a normalized ChatGPT run."""
+    import json as _json
+    from . import brightdata
+    return brightdata.parse_run(_json.dumps(SAMPLE_BRIGHTDATA), "sample_brightdata.json")

@@ -264,6 +264,83 @@ def batch_features_csv(batch: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# ChatGPT Bright Data exports
+# --------------------------------------------------------------------------- #
+def chatgpt_sources_csv(run: dict) -> str:
+    rows = []
+    for rec in run.get("records", []):
+        for s in rec.get("sources", []):
+            rows.append({
+                "record_id": rec.get("record_id"), "prompt": rec.get("prompt", ""),
+                "url": s["url"], "normalized_url": s["normalized_url"], "domain": s.get("domain"),
+                "title": s.get("title"), "description": s.get("description"),
+                "source_group": s.get("source_group"), "cited_label": s["cited_label"],
+                "source_origin": s.get("source_origin"), "source_position": s.get("source_position"),
+                "observed_rank": s.get("observed_rank"), "date_published": s.get("date_published"),
+            })
+    return pd.DataFrame(rows).to_csv(index=False) if rows else "no sources\n"
+
+
+def chatgpt_features_csv(features: list[dict]) -> str:
+    return pd.DataFrame(features).to_csv(index=False) if features else "no features\n"
+
+
+def chatgpt_markdown_report(run: dict, an: dict) -> str:
+    s = (an or {}).get("summary", {})
+    lines: list[str] = []
+    a = lines.append
+    a(f"# ChatGPT Bright Data Source Audit — {run.get('run_id','')}\n")
+    a(f"_Generated {run.get('created_at','')} · source file: {run.get('source_file_name','')}_\n")
+    a(f"> {config.CHATGPT_INTRO}\n")
+    a(f"> {config.CAVEAT_MORE_ONLY}\n")
+
+    a("## Sample sizes\n")
+    a(_md_table(pd.DataFrame([
+        {"metric": "Records / prompts", "value": s.get("n_records", 0)},
+        {"metric": "Sources (total)", "value": s.get("n_sources", 0)},
+        {"metric": "Cited sources", "value": s.get("n_cited", 0)},
+        {"metric": "More-only sources", "value": s.get("n_more_only", 0)},
+        {"metric": "Scraped OK", "value": s.get("n_scraped", 0)},
+        {"metric": "Scrape success rate", "value": s.get("scrape_success_rate", 0.0)},
+    ])))
+
+    gc = pd.DataFrame(an.get("group_compare") or [])
+    cols = ["feature", "cited_mean", "noncited_mean", "cited_median", "noncited_median", "delta"]
+    if not gc.empty:
+        a("## Cited vs more-only — pre-answer signals (non-circular)\n")
+        a(_md_table(gc[gc["phase"] == "pre_answer"][cols]))
+        a("## Cited vs more-only — post-output overlap (may be circular)\n")
+        a(f"> {config.CAVEAT_ANSWER_CG}\n")
+        a(_md_table(gc[gc["phase"] == "post_output"][cols]))
+
+    sb = pd.DataFrame(an.get("source_breakdown") or [])
+    if not sb.empty:
+        a("## Source-type breakdown\n")
+        a(_md_table(sb))
+
+    off = an.get("official") or {}
+    if off:
+        a("## Official signals (institutional vs brand-candidate)\n")
+        a(_md_table(pd.DataFrame([{"group": k, **v} for k, v in off.items()])))
+
+    tc = pd.DataFrame(an.get("top_domains_cited") or [])
+    tm = pd.DataFrame(an.get("top_domains_more") or [])
+    if not tc.empty:
+        a("## Top domains — cited\n")
+        a(_md_table(tc))
+    if not tm.empty:
+        a("## Top domains — more-only\n")
+        a(_md_table(tm))
+
+    a("## Limitations\n")
+    a("- Observable source placement only — not ChatGPT's full internal retrieval set.\n"
+      "- More-only sources were not 'rejected'; they were surfaced but not marked cited.\n"
+      "- Post-output similarity may be partly circular; prefer pre-answer signals.\n"
+      "- No SERP recall@K here; any ordering is `source_position`/`observed_rank`, not Google rank.\n")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # write-all
 # --------------------------------------------------------------------------- #
 def write_all(run: dict) -> dict[str, str]:

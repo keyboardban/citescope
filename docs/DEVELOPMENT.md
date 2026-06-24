@@ -2,8 +2,9 @@
 
 **Project:** AI Search Citation Audit (`citescope`)
 **Repo:** https://github.com/keyboardban/citescope
-**Status:** 2 commits — `4a61da4` (initial build, 2026-06-23) · `dcce37b` (validity/matching/batch upgrade, 2026-06-24)
-**Size:** ~5,200 LOC across `src/` (engine), `ui/` (dashboard), `tests/`.
+**Status:** 3 commits — `4a61da4` (initial build, 2026-06-23) · `dcce37b` (validity/matching/batch, 2026-06-24) · `9569012` (Topic Studies + docs, 2026-06-24) — plus a working set adding the **ChatGPT Bright Data** mode (uncommitted at time of writing).
+**Modes:** (1) **Gemini SERP Reconstruction Audit** and (2) **ChatGPT Bright Data Source Audit** — selectable from the sidebar.
+**Size:** ~7,000 LOC across `src/` (20 engine modules), `ui/` (11 views), `tests/` (7 files / 23 tests).
 
 This document explains *why* the system is built the way it is, *how* it is structured, and *what changed at each step* — in detail.
 
@@ -17,6 +18,10 @@ CiteScope is a **black-box observational audit** of how an AI Search system (Gem
 - **non-cited reconstructed SERP candidates** — results we *independently* fetch from Apify for the same observed search queries.
 
 **The governing rule:** we only describe **observable patterns**. We never claim to know the AI's internal retrieval set or why any page was/wasn't cited. This rule shaped the data model, the metric design, and the UI copy.
+
+**Two audit modes** (sidebar switch), sharing one engine:
+- **Gemini SERP Reconstruction Audit** — prompt → Gemini grounding → reconstructed SERP (Apify) → scrape → compare **cited** vs **non-cited SERP candidates** (citation recall@K).
+- **ChatGPT Bright Data Source Audit** — upload a Bright Data export of ChatGPT runs → compare **cited sources** vs **more-only** (shown-but-not-cited) sources. No SERP reconstruction and **no recall@K**; it is an *observable source-placement* audit. (Any ordering is `source_position`/`observed_rank`, never Google rank.)
 
 **Terminology contract** (used consistently in code + UI + report):
 
@@ -74,18 +79,21 @@ citescope/
 │   ├── matching.py            # tiered citation↔candidate matching + recall variants
 │   ├── features.py            # one feature row per candidate (+ chunk scores)
 │   ├── analysis.py            # cited vs non-cited comparison, recall, correlations
-│   ├── batch.py               # multi-prompt runs + Mann-Whitney U + bootstrap CIs
+│   ├── batch.py               # multi-prompt runs + topic/intent aggregation + MWU + CIs
+│   ├── question_sets.py       # 3 built-in topic packs + paste parser (Topic Studies)
+│   ├── brightdata.py          # ChatGPT Bright Data export parser (cited / more-only)
+│   ├── chatgpt_pipeline.py    # ChatGPT source features + analysis (reuses the engine)
 │   ├── pipeline.py            # stage orchestration + run_full + abort/retry/cache
-│   ├── report.py              # CSV/JSON/Markdown/HTML exports (single run + batch)
-│   └── demo.py                # synthetic run for offline exploration + smoke test
+│   ├── report.py              # CSV/JSON/MD/HTML exports (run + batch + ChatGPT)
+│   └── demo.py                # synthetic run / topic study / Bright Data sample (offline)
 ├── ui/
 │   ├── theme.py               # palette + injected CSS
 │   ├── state.py               # session state + cached clients + recompute_downstream
 │   ├── components.py          # cards, badges, callouts, pipeline diagram
 │   ├── charts.py              # all Plotly visualizations
-│   └── views/                 # one module per dashboard section (9 views)
+│   └── views/                 # dashboard sections — 11 views across 2 modes
 ├── tests/                     # pytest suite + conftest (isolated temp storage)
-└── data/                      # runtime artifacts (gitignored): audit.db, runs/, raw/, exports/, batches/
+└── data/                      # runtime artifacts (gitignored): audit.db, runs/, raw/, exports/, batches/, chatgpt/
 ```
 
 ### 3.2 Layered design
@@ -97,15 +105,15 @@ citescope/
                             │ reads run dict / calls stages       │ cached clients
             ┌───────────────┴───────────────────────────────────┴─────────────────────┐
             │                              src/ (engine)                                │
-            │  pipeline (orchestration) ── matching ── features ── analysis ── batch     │
-            │  gemini_client   apify_runner   similarity   chunking   source_type        │
-            │  url_utils   retry   storage   ids   config   report   demo                │
+            │  pipeline ─ matching ─ features ─ analysis ─ batch ─ chatgpt_pipeline       │
+            │  gemini_client  apify_runner  brightdata  similarity  chunking  source_type │
+            │  url_utils  retry  storage  ids  config  report  demo  question_sets        │
             └───────────────────────────────────────────────────────────────────────────┘
-                       │ google-genai            │ apify-client          │ SQLite + JSON
-                  Gemini API (grounding)    Apify actors            data/
+              │ google-genai        │ apify-client      │ Bright Data file     │ SQLite+JSON
+         Gemini API (grounding)  Apify actors      (uploaded JSON/CSV)      data/
 ```
 
-The UI never talks to external APIs directly; it calls engine *stages* and reads the **run dict**.
+The UI never talks to external APIs directly; it calls engine *stages* and reads the **run dict** (Gemini mode) or the **chatgpt run / batch dicts** (ChatGPT / Topic Studies). Both modes reuse the same scraping, chunking, similarity, source-type, and (parameterized) analysis helpers.
 
 ### 3.3 The data model (the "run dict")
 
@@ -129,6 +137,12 @@ run = {
 }
 ```
 
+**Parallel dicts.** Topic Studies / Batch produce a `batch` dict (`per_prompt[]`, pooled `features[]`,
+`aggregate{sample_sizes, group_stats, recall, by_topic, by_intent, patterns}`). ChatGPT mode produces a
+`chatgpt run` dict (`records[].sources[]`, each labeled `cited` vs `more_only` with an `appearances[]`
+trail), persisted under `data/chatgpt/`. Their feature rows reuse the same pre-answer / post-output split
+so the shared analysis + charts work unchanged.
+
 ### 3.4 Pipeline & data flow
 
 ```
@@ -149,10 +163,28 @@ Prompt
      assemble_run → save_run → dashboard / export
 ```
 
-Two entry modes share the same stages:
+Entry points (all share the same stages):
 - **Interactive** (one button per view) — each view calls a single stage and stores the result; `state.recompute_downstream()` re-derives matching→features→analysis cheaply.
 - **One-click** `run_full()` — chains all stages with a progress callback.
-- **Batch** `run_batch()` — loops `run_full()` over many prompts, then aggregates.
+- **Batch / Topic Studies** `run_batch()` — loops `run_full()` over many prompts (or the 3 built-in topic packs / pasted prompts), aggregating cited-vs-non-cited patterns **by topic and intent** (Mann-Whitney U + bootstrap CIs).
+
+**ChatGPT Bright Data flow (mode 2)** — no Gemini, no SERP reconstruction; reuses scraping/chunking/similarity/source-type and the parameterized analysis:
+
+```
+Bright Data export (JSON/CSV upload)
+  └► brightdata.parse_run ─ per record: prompt, answer, web_search_query
+        ─ sources from citations / search_sources_more / search_sources / links_attached / response_raw
+        ─ dedup by normalized URL (cited wins; appearances kept) → cited vs more-only
+        │  (if 0 sources → flagged as a Bright Data INPUT/prompt file, not a results export)
+        ▼
+     select scope → chatgpt_pipeline.scrape_sources (shared Apify content crawler)
+        ▼
+     chatgpt_pipeline.build_features  (same pre-answer vs post-output split)
+        ▼
+     chatgpt_pipeline.analyze  (cited vs more-only; source-type / official / top domains; NO recall@K)
+        ▼
+     dashboard tabs + CSV / Markdown export
+```
 
 ### 3.5 Feature row (one per unique SERP candidate)
 
@@ -188,7 +220,7 @@ Two entry modes share the same stages:
 
 ## 4. Development timeline & change log (detailed)
 
-Two commits exist; iterations **A–E happened during the initial uncommitted development session and were folded into commit `4a61da4`**, while iteration **F is commit `dcce37b`**. Each entry lists *what, why, files, verification*.
+Iterations **A–E** were folded into commit `4a61da4` (initial uncommitted session); **F** is commit `dcce37b`; **G** is commit `9569012`; **H** is the current working tree (commit pending). Each entry lists *what, why, files, verification*.
 
 ### Iteration A — From-scratch build (→ `4a61da4`)
 **What:** Designed and implemented the full system: engine (config, ids, url_utils, storage, chunking, similarity, source_type, gemini_client, apify_runner, matching, features, analysis, pipeline, report, demo) + Streamlit dashboard (theme, state, components, charts, 8 views) + README, `.env.example`, `.streamlit/config.toml`.
@@ -260,6 +292,23 @@ A pipeline review identified that some conclusions could be misleading. This ite
 
 **Verification:** `pytest -q` → 12 passed; compile clean; `AppTest` rendered all **9 views** green; engine smoke confirmed recall variants, weak-not-cited, brand detection, length correlation, retry classification, and batch stats.
 
+### Iteration G — Topic Studies mode (commit `9569012`)
+**What:** A topic-aware front end over batch mode. 3 built-in **question packs** (Healthcare/Skincare, Automotive, Real Estate — 12 prompts each, with `intent`), plus **paste-many** input — one prompt per line, **no ID/intent required** (special chars like `|` kept verbatim) or the structured `ID | Intent | Prompt` format.
+**Why:** Single-run findings are anecdotal; the user wanted to throw many questions per topic and see cited-vs-non-cited patterns.
+**Change:** `src/question_sets.py` (packs + `simple_prompts`/`parse_prompt_block`); `batch.py` extended to accept tagged items and aggregate `by_topic` / `by_intent` + per-tier correlations + auto-generated **pattern strings**; `demo.make_demo_topic_study()` (offline); `ui/views/topics.py` (input modes: packs / paste / both) + topic charts (`topic_compare`, `topic_feature_compare`) + nav entry; `report.batch_markdown_report` extended with patterns + by-topic/intent.
+**Also:** project docs added (`DEVELOPMENT.md`, `ARCHITECTURE_BEFORE_AFTER.md`, `24_06_2026.docx`).
+**Verification:** `pytest` → 16 passed; `AppTest` rendered all 9 views + the populated Topic Studies page (demo) green.
+
+### Iteration H — ChatGPT Bright Data Source Audit (working tree; commit pending)
+**What:** A **second audit mode** added as a parallel workflow (Gemini mode untouched) behind a sidebar **mode switch**. Upload a Bright Data export of ChatGPT runs → compare **cited sources** vs **more-only** (shown-but-not-cited) sources.
+**Change:**
+- `src/brightdata.py` — defensive JSON/CSV parser. Extracts `prompt` (falls back to `?q=` in `url`), `answer_text` (prefers `answer_text_markdown`), `web_search_query`, and sources from `citations` (the `cited` bool is authoritative), `search_sources_more`, `search_sources` (keeps `rank` as `observed_rank`), `links_attached` (cited fallback only if no citations), and `response_raw` (last resort). **Dedup by normalized URL; cited wins; `appearances[]` preserved.**
+- `src/chatgpt_pipeline.py` — flatten/dedup, reuse `pipeline.stage_scrape`, build cited-vs-more-only features (same pre/post split), and `analyze` via the now-parameterized analysis helpers. **No recall@K.**
+- `analysis.py` made reusable: `features_df` / `group_compare` / `correlation_with_citation` / `length_sim_correlation` take optional `numeric`/`labels`/`phase`/`sim_col` (defaults unchanged → Gemini code unaffected).
+- `ui/views/chatgpt.py` — 7-tab page (Upload · Records · Source Table · Scrape · Feature Analysis · Content · Report); `app.py` mode switch; `storage` ChatGPT snapshots; `report` ChatGPT exports; `demo.make_demo_brightdata()` sample; `source_type` gained Thai/intl government suffixes (`.go.th`, …).
+**Follow-up fix (input vs output file):** users uploaded the Bright Data **input prompt CSVs** (`*_prompts.csv`, columns `url,prompt,country,…`) which have no `citations` → an empty audit ("can't run"). The parser now sets `looks_like_input`/`n_sources`, and the Upload tab shows a clear error pointing to the **results** export (large `sd_*.json`). Real outputs parse fine (e.g. a 98 MB file → 36 records / 233 cited / 271 more-only in < 1 s).
+**Verification:** `pytest` → **23 passed** (`test_brightdata.py` covers array/CSV parse, labeling + cited-wins, URL dedup, `links_attached` fallback, input-file detection, one-row-per-source features); `AppTest` rendered **both** modes (all 10 Gemini views + the ChatGPT page with the sample) green.
+
 ---
 
 ## 5. Testing & verification (current)
@@ -268,11 +317,11 @@ A pipeline review identified that some conclusions could be misleading. This ite
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m compileall -q src ui app.py tests   # syntax/imports
-pytest -q                                      # 12 unit tests
+pytest -q                                      # 23 unit tests
 streamlit run app.py                           # manual; or AppTest headless
 ```
 
-`tests/` coverage: domain-only-not-cited + recall variants + feature labels (`test_matching.py`), truncation metadata (`test_features.py`), retry classification + backoff (`test_retry.py`), Gemini-abort short-circuit / Apify-not-called (`test_pipeline.py`), embedding-cache no-recompute (`test_embedding.py`). CI runs compile + pytest on every push.
+`tests/` coverage: domain-only-not-cited + recall variants + feature labels (`test_matching.py`), truncation metadata (`test_features.py`), retry classification + backoff (`test_retry.py`), Gemini-abort short-circuit / Apify-not-called (`test_pipeline.py`), embedding-cache no-recompute (`test_embedding.py`), topic packs + paste parser + per-topic aggregation (`test_topics.py`), and Bright Data parse/labeling/dedup/input-detection/features (`test_brightdata.py`). CI runs compile + pytest on every push.
 
 ---
 
@@ -283,11 +332,12 @@ streamlit run app.py                           # manual; or AppTest headless
 - `brand_official_candidate` is a domain-token heuristic (NER would be stronger).
 - Single-run findings are anecdotal; use Batch mode for aggregated associations — and even those are observational, not causal.
 - Freshness depends on a parseable page date; embeddings/batches consume API quota.
+- **ChatGPT mode:** more-only ≠ rejected, and it is **not** ChatGPT's full internal set; no recall@K; `response_raw` extraction is best-effort; Bright Data outputs are large (10–100 MB) but within Streamlit's 200 MB upload default.
 
 ## 7. Future work
 
 - Logistic regression / feature importances on the pooled batch dataset.
-- Cross-engine/model comparison for the same prompt.
+- Cross-engine comparison: **Gemini vs ChatGPT** cited-source patterns on the same prompts.
 - SERP feature parity (PAA, knowledge panels, dates) + position-vs-fold modeling.
 - Pluggable embedding providers + embedding-cache TTL; NER-based entity detection.
 
@@ -300,3 +350,5 @@ streamlit run app.py                           # manual; or AppTest headless
 **Match tiers (strong → weak):** `exact → normalized → final_redirect → canonical → amp_canonical → domain_only → no_match`. Strong = first five (sets `cited=1`); `domain_only` = weak (never cited by default); `no_match` = not in the reconstructed top-K.
 
 **Recall variants:** `strict` = identity tiers · `canonical` = + canonical/amp · `domain_inclusive` = + weak domain (exploratory).
+
+**ChatGPT mode terms:** cited sources · more-only / shown-but-not-cited sources · observable source set · source-placement audit. **Source origins** (dedup priority, cited wins): `citations` → `search_sources_more` → `search_sources` (→ `observed_rank`) → `links_attached` (cited fallback) → `response_raw` (last resort). A file with prompts but 0 sources is treated as a Bright Data **input** file, not a results export.

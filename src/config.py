@@ -24,11 +24,12 @@ RAW_DIR = DATA_DIR / "raw"            # raw API responses (audit trail)
 RUNS_DIR = DATA_DIR / "runs"          # one JSON snapshot per completed run
 EXPORTS_DIR = DATA_DIR / "exports"    # generated CSV/JSON/Markdown reports
 BATCHES_DIR = DATA_DIR / "batches"    # batch-run summaries (multi-prompt)
+CHATGPT_DIR = DATA_DIR / "chatgpt"    # ChatGPT Bright Data audit snapshots
 DB_PATH = DATA_DIR / "audit.db"       # SQLite: run index + API/embedding cache
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, RAW_DIR, RUNS_DIR, EXPORTS_DIR, BATCHES_DIR):
+    for d in (DATA_DIR, RAW_DIR, RUNS_DIR, EXPORTS_DIR, BATCHES_DIR, CHATGPT_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -135,6 +136,25 @@ CAVEAT_RECALL = (
 CAVEAT_BATCH = (
     "Batch results are observable associations across runs, not causal evidence about "
     "how the AI selects or cites sources."
+)
+
+# --------------------------------------------------------------------------- #
+# ChatGPT Bright Data Source Audit framing
+# --------------------------------------------------------------------------- #
+CHATGPT_INTRO = (
+    "**ChatGPT Bright Data Audit** analyzes sources surfaced by ChatGPT through Bright "
+    "Data. It compares sources marked as **cited** with additional sources **shown but "
+    "not cited** (more-only). This does **not** reveal ChatGPT's full internal retrieval "
+    "set; it only studies observable **source placement**."
+)
+CAVEAT_MORE_ONLY = (
+    "**More-only sources** are surfaced in the Bright Data / ChatGPT output but not marked "
+    "as cited. This does **not** mean ChatGPT rejected or ignored them."
+)
+CAVEAT_ANSWER_CG = (
+    "Page–answer and chunk–answer similarity are **post-output** semantic-overlap metrics. "
+    "They may be partly **circular** because the answer may have been generated from cited "
+    "sources. Treat them as overlap visualizers, not proof of source selection."
 )
 
 

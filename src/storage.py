@@ -223,6 +223,34 @@ def list_batches(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# --------------------------------------------------------------------------- #
+# ChatGPT Bright Data run snapshots (file-based; separate from gemini runs)
+# --------------------------------------------------------------------------- #
+def save_chatgpt_run(run: dict) -> str:
+    config.ensure_dirs()
+    path = config.CHATGPT_DIR / f"{run['run_id']}.json"
+    path.write_text(json.dumps(run, indent=2, default=str, ensure_ascii=False), "utf-8")
+    return str(path)
+
+
+def load_chatgpt_run(run_id: str) -> dict | None:
+    path = config.CHATGPT_DIR / f"{run_id}.json"
+    return json.loads(path.read_text("utf-8")) if path.exists() else None
+
+
+def list_chatgpt_runs(limit: int = 50) -> list[dict]:
+    config.ensure_dirs()
+    out = []
+    for p in config.CHATGPT_DIR.glob("*.json"):
+        try:
+            d = json.loads(p.read_text("utf-8"))
+        except (ValueError, OSError):
+            continue
+        out.append({"run_id": d.get("run_id", p.stem), "created_at": d.get("created_at", ""),
+                    "source_file_name": d.get("source_file_name", ""), "n_records": d.get("n_records", 0)})
+    return sorted(out, key=lambda x: x.get("created_at", ""), reverse=True)[:limit]
+
+
 def write_export(filename: str, content: str | bytes) -> str:
     config.ensure_dirs()
     path = config.EXPORTS_DIR / filename

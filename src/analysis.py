@@ -41,11 +41,12 @@ FEATURE_PHASE = {f: "pre_answer" for f in PRE_ANSWER_FEATURES}
 FEATURE_PHASE.update({f: "post_output" for f in POST_OUTPUT_FEATURES})
 
 
-def features_df(features: list[dict]) -> pd.DataFrame:
+def features_df(features: list[dict], numeric: list[str] | None = None) -> pd.DataFrame:
+    numeric = numeric or NUMERIC_FEATURES
     df = pd.DataFrame(features)
     if df.empty:
         return df
-    for col in NUMERIC_FEATURES:
+    for col in numeric:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
@@ -55,22 +56,26 @@ def _round(x):
     return None if x is None or (isinstance(x, float) and pd.isna(x)) else round(float(x), 4)
 
 
-def group_compare(df: pd.DataFrame) -> pd.DataFrame:
-    """Mean & median of each numeric feature for cited vs non-cited candidates."""
+def group_compare(df: pd.DataFrame, numeric: list[str] | None = None,
+                  labels: dict | None = None, phase: dict | None = None) -> pd.DataFrame:
+    """Mean & median of each numeric feature for cited vs non-cited rows."""
+    numeric = numeric or NUMERIC_FEATURES
+    labels = labels or FEATURE_LABELS
+    phase = phase or FEATURE_PHASE
     if df.empty or "cited" not in df.columns:
         return pd.DataFrame()
     rows = []
     cited = df[df["cited"] == 1]
     noncited = df[df["cited"] == 0]
-    for col in NUMERIC_FEATURES:
+    for col in numeric:
         if col not in df.columns:
             continue
         cm, nm = cited[col].mean(skipna=True), noncited[col].mean(skipna=True)
         cmd, nmd = cited[col].median(skipna=True), noncited[col].median(skipna=True)
         rows.append({
-            "feature": FEATURE_LABELS.get(col, col),
+            "feature": labels.get(col, col),
             "key": col,
-            "phase": FEATURE_PHASE.get(col, "pre_answer"),
+            "phase": phase.get(col, "pre_answer"),
             "cited_mean": _round(cm),
             "noncited_mean": _round(nm),
             "cited_median": _round(cmd),
@@ -158,32 +163,36 @@ def summary_metrics(run: dict) -> dict:
     }
 
 
-def correlation_with_citation(df: pd.DataFrame) -> pd.DataFrame:
+def correlation_with_citation(df: pd.DataFrame, numeric: list[str] | None = None,
+                              labels: dict | None = None, phase: dict | None = None) -> pd.DataFrame:
     """Point-biserial-style correlation of each numeric feature with `cited`."""
+    numeric = numeric or NUMERIC_FEATURES
+    labels = labels or FEATURE_LABELS
+    phase = phase or FEATURE_PHASE
     if df.empty or "cited" not in df.columns:
         return pd.DataFrame()
     rows = []
     y = df["cited"].astype(float)
-    for col in NUMERIC_FEATURES:
+    for col in numeric:
         if col not in df.columns:
             continue
         x = pd.to_numeric(df[col], errors="coerce")
         mask = x.notna()
-        phase = FEATURE_PHASE.get(col, "pre_answer")
+        ph = phase.get(col, "pre_answer")
         if mask.sum() < 3 or y[mask].nunique() < 2 or x[mask].nunique() < 2:
-            rows.append({"feature": FEATURE_LABELS.get(col, col), "key": col, "phase": phase, "corr": None})
+            rows.append({"feature": labels.get(col, col), "key": col, "phase": ph, "corr": None})
             continue
         r = float(np.corrcoef(x[mask], y[mask])[0, 1])
-        rows.append({"feature": FEATURE_LABELS.get(col, col), "key": col, "phase": phase, "corr": round(r, 3)})
+        rows.append({"feature": labels.get(col, col), "key": col, "phase": ph, "corr": round(r, 3)})
     return pd.DataFrame(rows)
 
 
-def length_sim_correlation(df: pd.DataFrame) -> dict:
+def length_sim_correlation(df: pd.DataFrame, sim_col: str = "page_output_sim") -> dict:
     """Correlation of page length with page-answer similarity (length-bias check)."""
     out: dict[str, float | None] = {}
-    if df.empty or "page_output_sim" not in df.columns:
+    if df.empty or sim_col not in df.columns:
         return out
-    y = pd.to_numeric(df["page_output_sim"], errors="coerce")
+    y = pd.to_numeric(df[sim_col], errors="coerce")
     for length_col in ("word_count", "char_count"):
         if length_col not in df.columns:
             continue

@@ -212,3 +212,12 @@ stage_features  (embedding cache via storage) →  stage_analyze → run
 | Re-embedding on every recompute | in-memory only | persistent SQLite embedding cache |
 | Single-run anecdotes | only mode | Batch mode with sample sizes, MWU p-values, bootstrap CIs (still observational) |
 | Narrow "official" detection | gov/edu/mil/int only | + brand-official-candidate (entity's own site) |
+
+---
+
+## 7. Later additions (after `dcce37b`)
+
+This document compares the `4a61da4 → dcce37b` edit. Two further iterations followed — see the full detail in **`DEVELOPMENT.md` §4 (Iterations G & H)**:
+
+- **Topic Studies** (commit `9569012`) — `src/question_sets.py` (3 topic packs + paste-many, no ID/intent needed) and `ui/views/topics.py`; `batch.py` gained `by_topic` / `by_intent` / `patterns`. Engine modules 17→18, views 9→10.
+- **ChatGPT Bright Data Source Audit** (working tree) — a **second audit mode** behind a sidebar switch: `src/brightdata.py` (parser), `src/chatgpt_pipeline.py`, `ui/views/chatgpt.py`, an `app.py` mode selector, and parameterized analysis helpers so both modes share them. Compares **cited** vs **more-only** sources; no recall@K. Engine modules 18→20, views 10→11, SQLite/JSON gains `data/chatgpt/`. Includes an input-vs-output file guard (`looks_like_input`). Tests 12→23.

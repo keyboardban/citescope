@@ -308,15 +308,16 @@ def recall_grouped(recall: dict) -> go.Figure:
     return _style(fig, 320)
 
 
-def length_vs_sim_scatter(df: pd.DataFrame) -> go.Figure:
+def length_vs_sim_scatter(df: pd.DataFrame, sim_col: str = "page_output_sim") -> go.Figure:
     """Page length vs page-answer similarity — visualizes the length-bias confound."""
-    if df.empty or "word_count" not in df.columns or "page_output_sim" not in df.columns:
+    if df.empty or "word_count" not in df.columns or sim_col not in df.columns:
         return _style(go.Figure(), 320)
-    d = _with_group(df.dropna(subset=["word_count", "page_output_sim"]))
+    d = _with_group(df.dropna(subset=["word_count", sim_col]))
     if d.empty:
         return _style(go.Figure(), 320)
-    fig = px.scatter(d, x="word_count", y="page_output_sim", color="group",
-                     color_discrete_map=CITED_SEQ, hover_data=["domain"])
+    hover = ["domain"] if "domain" in d.columns else None
+    fig = px.scatter(d, x="word_count", y=sim_col, color="group",
+                     color_discrete_map=CITED_SEQ, hover_data=hover)
     fig.update_traces(marker=dict(size=10, opacity=0.75))
     fig.update_layout(title="Page length vs page–answer similarity (length-bias check)")
     fig.update_xaxes(title="word count")

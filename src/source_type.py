@@ -52,6 +52,8 @@ _add("documentation", "readthedocs.io", "readthedocs.org", "developer.mozilla.or
 
 _TLD_OFFICIAL = {
     ".gov": "government", ".mil": "government", ".int": "government",
+    ".go.th": "government", ".go.jp": "government", ".go.kr": "government",
+    ".go.id": "government", ".gob": "government",
     ".edu": "education", ".ac": "education",
 }
 
