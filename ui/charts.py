@@ -239,6 +239,23 @@ def feature_heatmap(df: pd.DataFrame, max_rows: int = 24) -> go.Figure:
 
 
 # --------------------------------------------------------------------------- #
+# intent → source type
+# --------------------------------------------------------------------------- #
+def intent_sourcetype_bar(long_records: list[dict], group: str | None = None,
+                          title: str = "Source types by intent") -> go.Figure:
+    """Stacked bar: source-type composition per intent (optionally a single group)."""
+    rows = [r for r in long_records if group is None or r["group"] == group]
+    if not rows:
+        return _style(go.Figure(), 340)
+    d = pd.DataFrame(rows).groupby(["intent", "source_type"])["n"].sum().reset_index()
+    fig = px.bar(d, x="intent", y="n", color="source_type", barmode="stack",
+                 color_discrete_map=SOURCE_COLORS)
+    fig.update_layout(title=title)
+    fig.update_xaxes(title="", tickangle=20)
+    return _style(fig, 380)
+
+
+# --------------------------------------------------------------------------- #
 # questions × domains (per-question / clustering)
 # --------------------------------------------------------------------------- #
 def question_domain_heatmap(df: pd.DataFrame, title: str = "Questions × domains") -> go.Figure:

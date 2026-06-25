@@ -49,6 +49,8 @@ def flatten_sources(run: dict) -> list[dict]:
             "run_id": run.get("run_id"), "record_id": rec.get("record_id"),
             "prompt": rec.get("prompt", ""), "answer_text": rec.get("answer_text", ""),
             "web_search_query": rec.get("web_search_query", []),
+            "intent": rec.get("intent") or "", "topic": rec.get("topic") or "",
+            "prompt_id": rec.get("prompt_id"), "expected_source_types": rec.get("expected_source_types") or [],
         }
         for s in rec.get("sources", []):
             rows.append({**s, **ctx})
@@ -108,6 +110,8 @@ def build_features(run: dict, pages: dict[str, dict], sim_engine: SimilarityEngi
             "prompt": prompt, "answer_text": answer[:1500],
             "url": s["url"], "normalized_url": s["normalized_url"], "domain": s.get("domain", ""),
             "title": s.get("title", ""), "description": s.get("description", ""),
+            "intent": s.get("intent") or "", "topic": s.get("topic") or "",
+            "expected_source_types": s.get("expected_source_types") or [],
             # labels
             "cited_label": s["cited_label"], "cited": s["cited_label"],   # 'cited' alias -> analysis reuse
             "source_group": s.get("source_group", "more_only"),
@@ -199,3 +203,108 @@ def recompute(run: dict, pages: dict, sim_engine: SimilarityEngine) -> dict:
     """Build features + analysis for the current run/pages (used after upload & scrape)."""
     feat = build_features(run, pages, sim_engine)
     return {"features": feat["features"], "chunks": feat["chunks"], "analysis": analyze(feat["features"])}
+
+
+# --------------------------------------------------------------------------- #
+# Intent -> Source Type analysis (requires a Prompt Manifest applied)
+# --------------------------------------------------------------------------- #
+# Map free-form expected_source_types tokens onto our taxonomy + official flags.
+_EXP_SYN = {
+    "gov": "government", "government": "government", "official": "official",
+    "institutional": "government", "edu": "education", "education": "education",
+    "academic": "education", "university": "education",
+    "official_brand": "official_brand", "brand": "official_brand",
+    "manufacturer": "official_brand", "oem": "official_brand", "vendor": "official_brand",
+    "dealer": "ecommerce", "dealership": "ecommerce", "shop": "ecommerce", "store": "ecommerce",
+    "ecommerce": "ecommerce", "e-commerce": "ecommerce", "marketplace": "ecommerce", "retail": "ecommerce",
+    "review": "review", "reviews": "review", "news": "news", "media": "news", "press": "news",
+    "forum": "forum", "community": "forum", "wiki": "reference", "reference": "reference",
+    "encyclopedia": "reference", "blog": "blog", "video": "video", "social": "social",
+    "hospital": "hospital", "clinic": "hospital", "medical": "hospital", "health": "hospital",
+}
+
+
+def _canon(token: str) -> str:
+    t = (token or "").strip().lower().replace(" ", "_")
+    return _EXP_SYN.get(t, t)
+
+
+def _effective_canon_types(row: dict) -> set[str]:
+    """Canonical type tags for a source row (source_type + official/brand flags)."""
+    out = {_canon(row.get("source_type") or "unknown")}
+    if row.get("institutional_official"):
+        out.add("official")
+        out.add("government")
+    if row.get("brand_official_candidate"):
+        out.add("official_brand")
+    return out
+
+
+def intent_source_long(features: list[dict]) -> list[dict]:
+    """Aggregated counts per (intent, source_type, group=cited|more_only)."""
+    from collections import Counter
+    c: Counter = Counter()
+    for r in features:
+        intent = r.get("intent") or "Unspecified"
+        st = r.get("source_type") or "unknown"
+        grp = "cited" if r.get("cited") == 1 else "more_only"
+        c[(intent, st, grp)] += 1
+    return [{"intent": i, "source_type": s, "group": g, "n": n} for (i, s, g), n in sorted(c.items())]
+
+
+def intent_summary(features: list[dict]) -> list[dict]:
+    """Per-intent rollup: cite-rate + cited composition (official/review/ecommerce/forum)."""
+    from collections import Counter, defaultdict
+    by: dict[str, list] = defaultdict(list)
+    for r in features:
+        by[r.get("intent") or "Unspecified"].append(r)
+    rows = []
+    for intent, rs in sorted(by.items()):
+        cited = [r for r in rs if r.get("cited") == 1]
+        n, nc = len(rs), len(cited)
+
+        def pct(pred):
+            return round(sum(1 for r in cited if pred(r)) / nc, 3) if nc else 0.0
+
+        top = Counter(r.get("source_type") for r in cited).most_common(1)
+        rows.append({
+            "intent": intent, "n_sources": n, "n_cited": nc,
+            "cite_rate": round(nc / n, 3) if n else 0.0,
+            "official_cited_pct": pct(lambda r: r.get("institutional_official") or r.get("brand_official_candidate")),
+            "review_cited_pct": pct(lambda r: r.get("source_type") == "review"),
+            "ecommerce_cited_pct": pct(lambda r: r.get("source_type") == "ecommerce"),
+            "forum_cited_pct": pct(lambda r: r.get("source_type") == "forum"),
+            "top_cited_type": top[0][0] if top else None,
+        })
+    return rows
+
+
+def expected_vs_actual(features: list[dict]) -> list[dict]:
+    """Per question: compare manifest expected_source_types with actually-cited types (heuristic)."""
+    from collections import defaultdict
+    by: dict[str, list] = defaultdict(list)
+    for r in features:
+        by[(r.get("record_id") or r.get("run_id"))].append(r)
+    rows = []
+    for rs in by.values():
+        expected = next((r["expected_source_types"] for r in rs if r.get("expected_source_types")), [])
+        if not expected:
+            continue
+        cited = [r for r in rs if r.get("cited") == 1]
+        cited_canon: set[str] = set()
+        for r in cited:
+            cited_canon |= _effective_canon_types(r)
+        exp_pairs = [(t, _canon(t)) for t in expected]
+        found = [t for t, c in exp_pairs if c in cited_canon]
+        missing = [t for t, c in exp_pairs if c not in cited_canon]
+        exp_canon = {c for _, c in exp_pairs}
+        unexpected = sorted({(r.get("source_type") or "unknown") for r in cited
+                             if _canon(r.get("source_type") or "unknown") not in exp_canon})
+        rows.append({
+            "prompt_id": rs[0].get("prompt_id"), "intent": rs[0].get("intent"),
+            "prompt": (rs[0].get("prompt") or "")[:60],
+            "expected": "; ".join(expected), "cited_found": "; ".join(found),
+            "expected_missing": "; ".join(missing), "unexpected_cited": "; ".join(unexpected[:6]),
+            "coverage": round(len(found) / len(expected), 2) if expected else 0.0,
+        })
+    return rows

@@ -393,3 +393,17 @@ def make_demo_brightdata() -> dict:
     import json as _json
     from . import brightdata
     return brightdata.parse_run(_json.dumps(SAMPLE_BRIGHTDATA), "sample_brightdata.json")
+
+
+# Sample Prompt Manifest matching the SAMPLE_BRIGHTDATA prompts (for offline/tests).
+SAMPLE_MANIFEST = (
+    "prompt_id,topic,intent,prompt,country,prompt_language,expected_source_types\n"
+    "P1,Travel,Product/Recommendation,Top hotels in New York,US,en,review;ecommerce;official_brand\n"
+    "P2,Automotive,Regulation/Policy,What government incentives exist for electric vehicles in Thailand?,TH,en,government;news\n"
+    "P3,Real Estate,Buyer Guide,What should I check before buying a condominium in Bangkok?,TH,en,government;official_brand;review;ecommerce\n"
+)
+
+
+def make_demo_manifest() -> dict:
+    from . import brightdata
+    return brightdata.parse_manifest(SAMPLE_MANIFEST, "sample_manifest.csv")

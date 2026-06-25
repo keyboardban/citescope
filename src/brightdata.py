@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -278,3 +279,90 @@ def parse_run(raw: str | bytes, filename: str = "") -> dict:
         "n_more_only": n_more,
         "looks_like_input": looks_like_input,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Prompt Manifest (CSV/JSON): prompt_id, topic, intent, prompt, country,
+# prompt_language [, expected_source_types]. Matched to records to attach intent.
+# --------------------------------------------------------------------------- #
+def _prompt_key(text: str) -> str:
+    """Normalized prompt for matching (case/whitespace/trailing punctuation-insensitive)."""
+    t = re.sub(r"\s+", " ", (text or "").strip().lower())
+    return t.strip(" ?.!\"'")
+
+
+def _split_expected(v: Any) -> list[str]:
+    if not v:
+        return []
+    toks = v if isinstance(v, list) else re.split(r"[;,|]", str(v))
+    return [t.strip() for t in toks if t and t.strip()]
+
+
+def parse_manifest(raw: str | bytes, filename: str = "") -> dict:
+    """Parse a Prompt Manifest into match-ready entries."""
+    records, warnings = load_records(raw, filename)
+    entries: list[dict] = []
+    cols: set[str] = set()
+    for i, r in enumerate(records):
+        if not isinstance(r, dict):
+            continue
+        cols.update(r.keys())
+        prompt = (r.get("prompt") or "").strip()
+        phash = (str(r.get("prompt_hash")).strip() if r.get("prompt_hash") else None)
+        if not prompt and not phash:
+            warnings.append(f"Manifest row {i + 1}: no prompt or prompt_hash — skipped.")
+            continue
+        entries.append({
+            "prompt_id": str(r.get("prompt_id") or r.get("id") or f"P{i + 1}"),
+            "topic": (r.get("topic") or "").strip(),
+            "intent": (r.get("intent") or "").strip() or "Unspecified",
+            "prompt": prompt,
+            "country": r.get("country"),
+            "prompt_language": r.get("prompt_language") or r.get("language"),
+            "expected_source_types": _split_expected(r.get("expected_source_types")),
+            "prompt_hash": phash,
+            "_key": _prompt_key(prompt),
+        })
+    has_expected = any(e["expected_source_types"] for e in entries)
+    return {"entries": entries, "warnings": warnings, "columns": sorted(cols),
+            "has_expected": has_expected, "n": len(entries),
+            "source_file_name": filename or "manifest"}
+
+
+def apply_manifest(run: dict, manifest: dict) -> dict:
+    """Attach prompt_id/topic/intent/expected to each record + its sources (match by prompt/hash)."""
+    by_key, by_hash = {}, {}
+    for e in manifest.get("entries", []):
+        if e["_key"]:
+            by_key.setdefault(e["_key"], e)
+        if e["prompt_hash"]:
+            by_hash.setdefault(e["prompt_hash"], e)
+
+    matched, unmatched = 0, []
+    for rec in run.get("records", []):
+        rh = (str(rec.get("prompt_hash")).strip() if rec.get("prompt_hash") else None)
+        e = (by_hash.get(rh) if rh else None) or by_key.get(_prompt_key(rec.get("prompt", "")))
+        if e is None:
+            rec["intent"] = "(unmatched)"
+            rec["topic"] = rec.get("topic") or "(unmatched)"
+            rec["expected_source_types"] = []
+            unmatched.append((rec.get("prompt") or "")[:60])
+        else:
+            matched += 1
+            rec["intent"] = e["intent"]
+            rec["topic"] = e["topic"]
+            rec["prompt_id"] = e["prompt_id"]
+            rec["country"] = rec.get("country") or e["country"]
+            rec["prompt_language"] = e["prompt_language"]
+            rec["expected_source_types"] = e["expected_source_types"]
+        for s in rec.get("sources", []):
+            s["intent"] = rec.get("intent")
+            s["topic"] = rec.get("topic")
+            s["prompt_id"] = rec.get("prompt_id")
+
+    run["has_intent"] = True
+    run["manifest"] = {"applied": True, "matched": matched, "unmatched": len(unmatched),
+                       "total": len(run.get("records", [])), "has_expected": manifest.get("has_expected", False),
+                       "source_file_name": manifest.get("source_file_name")}
+    return {"matched": matched, "unmatched": len(unmatched),
+            "unmatched_prompts": unmatched[:10], "total": len(run.get("records", []))}

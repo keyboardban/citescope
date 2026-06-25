@@ -272,6 +272,7 @@ def chatgpt_sources_csv(run: dict) -> str:
         for s in rec.get("sources", []):
             rows.append({
                 "record_id": rec.get("record_id"), "prompt": rec.get("prompt", ""),
+                "intent": rec.get("intent"), "topic": rec.get("topic"),
                 "url": s["url"], "normalized_url": s["normalized_url"], "domain": s.get("domain"),
                 "title": s.get("title"), "description": s.get("description"),
                 "source_group": s.get("source_group"), "cited_label": s["cited_label"],
@@ -285,7 +286,18 @@ def chatgpt_features_csv(features: list[dict]) -> str:
     return pd.DataFrame(features).to_csv(index=False) if features else "no features\n"
 
 
-def chatgpt_markdown_report(run: dict, an: dict) -> str:
+def chatgpt_intent_csv(intent_long: list[dict]) -> str:
+    """Intent × (group, source_type) count matrix as CSV."""
+    if not intent_long:
+        return "no intent data\n"
+    df = pd.DataFrame(intent_long)
+    piv = df.pivot_table(index="intent", columns=["group", "source_type"],
+                         values="n", aggfunc="sum", fill_value=0)
+    return piv.to_csv()
+
+
+def chatgpt_markdown_report(run: dict, an: dict, intent_summary: list | None = None,
+                            expected: list | None = None) -> str:
     s = (an or {}).get("summary", {})
     lines: list[str] = []
     a = lines.append
@@ -331,6 +343,13 @@ def chatgpt_markdown_report(run: dict, an: dict) -> str:
     if not tm.empty:
         a("## Top domains — more-only\n")
         a(_md_table(tm))
+
+    if intent_summary:
+        a("## Intent → Source Type (per-intent cited composition)\n")
+        a(_md_table(pd.DataFrame(intent_summary)))
+    if expected:
+        a("## Expected vs actual cited source types (heuristic)\n")
+        a(_md_table(pd.DataFrame(expected)[["intent", "expected", "cited_found", "expected_missing", "coverage"]]))
 
     a("## Limitations\n")
     a("- Observable source placement only — not ChatGPT's full internal retrieval set.\n"

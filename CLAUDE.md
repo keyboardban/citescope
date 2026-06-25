@@ -22,7 +22,7 @@ Similarity = a *semantic overlap proxy*, not proof of use.
 ```bash
 source .venv/bin/activate
 streamlit run app.py                 # launch UI (no keys? click "Load demo run" / "Load sample")
-pytest -q                            # 27 tests
+pytest -q                            # 32 tests
 python -m compileall -q src ui app.py tests
 ```
 Keys live in `.env`: `GEMINI_API_KEY` (Gemini mode + embeddings), `APIFY_TOKEN` (scraping in BOTH modes).
@@ -34,7 +34,7 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 - Shared: `url_utils.py`, `chunking.py`, `similarity.py` (lexical default / Gemini embeddings),
   `source_type.py`, `retry.py`, `storage.py` (SQLite cache+runs+embeddings+batches), `config.py`, `demo.py`.
 - Topic Studies / Batch: `batch.py` (+ `question_sets.py` = 3 packs + paste parser).
-- **ChatGPT mode:** `brightdata.py` (parser), `chatgpt_pipeline.py` (features+analysis, reuses engine), `ui/views/chatgpt.py`.
+- **ChatGPT mode:** `brightdata.py` (parser + **Prompt Manifest** match), `chatgpt_pipeline.py` (features + **intent→source-type** analysis), `ui/views/chatgpt.py` (Upload/Records/Sources/Scrape/Feature/Questions/**Intent**/Content/Report).
 - **Per-question / clustering:** `cluster.py` (question×domain matrix + Jaccard agglomerative clustering) → ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters".
 - Docs: `docs/DEVELOPMENT.md` (full architecture + change log A–H), `docs/ARCHITECTURE_BEFORE_AFTER.md`, `docs/24_06_2026.docx`.
 - Data (gitignored): `data/{runs,chatgpt,batches,raw,exports}/`, `data/audit.db`.
@@ -47,11 +47,13 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
    institutional vs brand-official, batch mode (Mann-Whitney U + bootstrap CIs), tests + CI.
 3. `9569012` — **Topic Studies** mode (3 packs: Healthcare/Skincare, Automotive, Real Estate + paste-many) + docs.
 4. `e3f9fce` — **ChatGPT Bright Data Source Audit** mode + input-vs-output guard + `CLAUDE.md` + doc updates.
-5. **Per-question separation + question clustering** (`src/cluster.py`) — ChatGPT "🧩 Questions" tab (per-question drilldown, question×domain heatmap, clusters) + Topic Studies "Question clusters". _(latest)_
+5. **Per-question separation + question clustering** (`src/cluster.py`) — ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters". (commit `9e31082`)
+6. **Prompt Manifest + Intent → Source Type analysis** — upload a manifest (`prompt_id,topic,intent,prompt[,country,prompt_language,expected_source_types]`), matched to records by prompt text/hash → attaches intent/topic to every record/source/feature. New "🎯 Intent" tab: intent×source-type counts+%, cited-by-intent, more-only-by-intent, cited-vs-more comparison, and expected-vs-actual. _(latest)_
 
 ## Repo state
-All session work is **committed & pushed to `main`** (latest commit covers per-question clustering); working tree clean.
-**27 pytest tests pass; AppTest renders both modes.** If you change code: run `pytest -q` + AppTest, then commit/push when asked.
+Latest committed = `9e31082` (clustering). **Uncommitted this session: Prompt Manifest + Intent → Source Type analysis**
+(`brightdata.parse_manifest`/`apply_manifest`, `chatgpt_pipeline.intent_*`, `ui/views/chatgpt.py` 🎯 Intent tab, report/demo/tests).
+**32 pytest tests pass; AppTest renders both modes.** If you change code: run `pytest -q` + AppTest, then commit/push when the user asks.
 
 ## Key gotchas (these bit us — remember them)
 - **Bright Data INPUT vs OUTPUT files.** The `*_prompts.csv` (cols `url,prompt,country,…`) are *input* prompt lists

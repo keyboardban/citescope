@@ -49,7 +49,7 @@ def render() -> None:
         _recompute()
 
     tabs = st.tabs(["📤 Upload", "📄 Records", "🔗 Source Table", "🕸️ Scrape Sources",
-                    "📈 Feature Analysis", "🧩 Questions", "🔬 Content", "📊 Report"])
+                    "📈 Feature Analysis", "🧩 Questions", "🎯 Intent", "🔬 Content", "📊 Report"])
     with tabs[0]:
         _tab_upload(ss)
     with tabs[1]:
@@ -63,8 +63,10 @@ def render() -> None:
     with tabs[5]:
         _tab_questions(ss)
     with tabs[6]:
-        _tab_content(ss)
+        _tab_intent(ss)
     with tabs[7]:
+        _tab_content(ss)
+    with tabs[8]:
         _tab_report(ss)
 
 
@@ -93,6 +95,38 @@ def _tab_upload(ss) -> None:
         else:
             st.success(f"Parsed {run['n_records']} records · {run['n_cited']} cited · "
                        f"{run['n_more_only']} more-only from `{up.name}`.")
+
+    # ---- Prompt Manifest (attaches topic + intent) ----
+    st.divider()
+    st.markdown("**Optional — Prompt Manifest** "
+                "(`prompt_id, topic, intent, prompt[, country, prompt_language, expected_source_types]`)")
+    st.caption("Matched to records by prompt text / prompt_hash → attaches **topic + intent** to every record, "
+               "source, and feature row, enabling the **🎯 Intent** analysis.")
+    mf = st.file_uploader("Prompt Manifest (CSV or JSON)", type=["csv", "json"], key="cg_manifest")
+    mc1, mc2 = st.columns(2)
+    if mc1.button("🔗 Apply manifest", disabled=mf is None, width="stretch"):
+        if not ss.get("cg_run"):
+            st.warning("Parse a results file first.")
+        else:
+            man = brightdata.parse_manifest(mf.getvalue(), mf.name)
+            stats = brightdata.apply_manifest(ss["cg_run"], man)
+            storage.save_chatgpt_run(ss["cg_run"])
+            _recompute()
+            st.success(f"Manifest matched **{stats['matched']}/{stats['total']}** records by prompt.")
+            if stats["unmatched"]:
+                st.warning(f"{stats['unmatched']} unmatched (prompt text/hash differs): "
+                           + "; ".join(stats["unmatched_prompts"][:4]))
+    if mc2.button("🧪 Load sample manifest", width="stretch"):
+        if not ss.get("cg_run"):
+            st.warning("Load the sample results first.")
+        else:
+            stats = brightdata.apply_manifest(ss["cg_run"], demo.make_demo_manifest())
+            storage.save_chatgpt_run(ss["cg_run"])
+            _recompute()
+            st.success(f"Sample manifest matched {stats['matched']}/{stats['total']} records.")
+    _man = (ss.get("cg_run") or {}).get("manifest")
+    if _man and _man.get("applied"):
+        st.info(f"Manifest applied — {_man['matched']}/{_man['total']} matched. Intent analysis is in the **🎯 Intent** tab.")
 
     run = ss.get("cg_run")
     if not run:
@@ -151,6 +185,7 @@ def _tab_sources(run) -> None:
         for s in rec["sources"]:
             rows.append({
                 "cited": bool(s["cited_label"]), "source_group": s["source_group"],
+                "intent": rec.get("intent"), "topic": rec.get("topic"),
                 "record_id": rec["record_id"], "domain": s.get("domain"), "title": s.get("title"),
                 "source_origin": s.get("source_origin"), "source_position": s.get("source_position"),
                 "observed_rank": s.get("observed_rank"), "url": s["url"], "description": s.get("description"),
@@ -336,6 +371,71 @@ def _tab_questions(ss) -> None:
                  + " (Jaccard distance, agglomerative). Observable grouping — not causal.")
 
 
+def _tab_intent(ss) -> None:
+    C.section("Intent → Source Type Analysis",
+              "For each intent, which website types does the AI search, surface, cite, or leave as more-only?", "🎯")
+    feats = ss.get("cg_features")
+    run = ss.get("cg_run")
+    if not feats:
+        C.empty_state("Parse a file first (Upload tab).", "🎯")
+        return
+    if not (run and run.get("has_intent")):
+        st.info("Upload & **Apply** a Prompt Manifest (Upload tab) to attach intent/topic — then this analysis activates.")
+        return
+    C.proxy_note("Observable source-placement patterns by intent — not the AI's internal retrieval process. "
+                 "'more-only' = shown-but-not-cited (not rejected).")
+
+    long = cgp.intent_source_long(feats)
+    ldf = pd.DataFrame(long)
+
+    # 1) Intent × Source Type (counts + %)
+    C.section("Intent × Source Type (all surfaced)", icon="📊")
+    counts = ldf.pivot_table(index="intent", columns="source_type", values="n", aggfunc="sum", fill_value=0)
+    st.plotly_chart(charts.intent_sourcetype_bar(long, None, "All surfaced source types by intent"), width="stretch")
+    st.dataframe(counts, width="stretch")
+    pct = counts.div(counts.sum(axis=1).replace(0, 1), axis=0).round(3)
+    with st.expander("Row % within each intent"):
+        st.dataframe(pct, width="stretch")
+
+    # 2) Cited source types by intent
+    C.section("Cited source types by intent", icon="✅")
+    cdf = ldf[ldf["group"] == "cited"]
+    if not cdf.empty:
+        st.plotly_chart(charts.intent_sourcetype_bar(long, "cited", "Cited source types by intent"), width="stretch")
+        st.dataframe(cdf.pivot_table(index="intent", columns="source_type", values="n", aggfunc="sum", fill_value=0),
+                     width="stretch")
+
+    # 3) More-only source types by intent
+    C.section("More-only (shown-but-not-cited) source types by intent", icon="🟡")
+    mdf = ldf[ldf["group"] == "more_only"]
+    if not mdf.empty:
+        st.dataframe(mdf.pivot_table(index="intent", columns="source_type", values="n", aggfunc="sum", fill_value=0),
+                     width="stretch")
+
+    # 4) Cited vs more-only comparison by intent
+    C.section("Cited vs more-only — composition by intent", icon="⚖️")
+    st.dataframe(pd.DataFrame(cgp.intent_summary(feats)), width="stretch", hide_index=True)
+    st.caption("Shares are of each intent's **cited** sources. official_cited_pct = % of cited that are institutional "
+               "or brand-official (heuristic).")
+    comp = ldf.pivot_table(index=["intent", "source_type"], columns="group", values="n",
+                           aggfunc="sum", fill_value=0).reset_index()
+    for col in ("cited", "more_only"):
+        if col not in comp.columns:
+            comp[col] = 0
+    comp["cite_rate"] = (comp["cited"] / (comp["cited"] + comp["more_only"]).replace(0, 1)).round(2)
+    with st.expander("Per intent × source-type (cited vs more-only + cite-rate)"):
+        st.dataframe(comp, width="stretch", hide_index=True)
+
+    # 5) Expected vs actual
+    if run.get("manifest", {}).get("has_expected"):
+        C.section("Expected vs actual cited source types", icon="🧭")
+        ev = cgp.expected_vs_actual(feats)
+        if ev:
+            st.dataframe(pd.DataFrame(ev), width="stretch", hide_index=True)
+            st.caption("Heuristic mapping of manifest `expected_source_types` onto observed source types + "
+                       "official/brand flags. coverage = share of expected types that appeared among cited sources.")
+
+
 def _tab_content(ss) -> None:
     C.section("Content / Chunk Visualizer", icon="🔬")
     feats = ss.get("cg_features")
@@ -393,16 +493,22 @@ def _tab_report(ss) -> None:
     an = ss.get("cg_analysis") or {}
     feats = ss.get("cg_features") or []
     rid = run["run_id"]
+    intent_sum = cgp.intent_summary(feats) if run.get("has_intent") else None
+    expected = cgp.expected_vs_actual(feats) if run.get("manifest", {}).get("has_expected") else None
+    md = report.chatgpt_markdown_report(run, an, intent_sum, expected)
     c = st.columns(3)
     c[0].download_button("⬇️ Source table (CSV)", report.chatgpt_sources_csv(run),
                          f"{rid}_sources.csv", "text/csv", width="stretch")
     c[1].download_button("⬇️ Feature table (CSV)", report.chatgpt_features_csv(feats),
                          f"{rid}_features.csv", "text/csv", width="stretch")
-    c[2].download_button("⬇️ Report (Markdown)", report.chatgpt_markdown_report(run, an),
-                         f"{rid}_report.md", "text/markdown", width="stretch")
+    c[2].download_button("⬇️ Report (Markdown)", md, f"{rid}_report.md", "text/markdown", width="stretch")
+    if run.get("has_intent"):
+        st.download_button("⬇️ Intent × source-type (CSV)",
+                           report.chatgpt_intent_csv(cgp.intent_source_long(feats)),
+                           f"{rid}_intent.csv", "text/csv", width="stretch")
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)
         st.success(f"Saved: {path}")
     C.section("Report preview", icon="📄")
     with st.container(border=True):
-        st.markdown(report.chatgpt_markdown_report(run, an))
+        st.markdown(md)
