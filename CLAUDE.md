@@ -22,7 +22,7 @@ Similarity = a *semantic overlap proxy*, not proof of use.
 ```bash
 source .venv/bin/activate
 streamlit run app.py                 # launch UI (no keys? click "Load demo run" / "Load sample")
-pytest -q                            # 23 tests
+pytest -q                            # 27 tests
 python -m compileall -q src ui app.py tests
 ```
 Keys live in `.env`: `GEMINI_API_KEY` (Gemini mode + embeddings), `APIFY_TOKEN` (scraping in BOTH modes).
@@ -35,6 +35,7 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
   `source_type.py`, `retry.py`, `storage.py` (SQLite cache+runs+embeddings+batches), `config.py`, `demo.py`.
 - Topic Studies / Batch: `batch.py` (+ `question_sets.py` = 3 packs + paste parser).
 - **ChatGPT mode:** `brightdata.py` (parser), `chatgpt_pipeline.py` (features+analysis, reuses engine), `ui/views/chatgpt.py`.
+- **Per-question / clustering:** `cluster.py` (question×domain matrix + Jaccard agglomerative clustering) → ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters".
 - Docs: `docs/DEVELOPMENT.md` (full architecture + change log A–H), `docs/ARCHITECTURE_BEFORE_AFTER.md`, `docs/24_06_2026.docx`.
 - Data (gitignored): `data/{runs,chatgpt,batches,raw,exports}/`, `data/audit.db`.
 
@@ -45,15 +46,12 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
    abort-before-Apify on failed Gemini, concurrent redirect resolution, persistent embedding cache,
    institutional vs brand-official, batch mode (Mann-Whitney U + bootstrap CIs), tests + CI.
 3. `9569012` — **Topic Studies** mode (3 packs: Healthcare/Skincare, Automotive, Real Estate + paste-many) + docs.
-4. **(uncommitted)** — **ChatGPT Bright Data Source Audit** mode + the input-vs-output file fix + doc updates.
+4. `e3f9fce` — **ChatGPT Bright Data Source Audit** mode + input-vs-output guard + `CLAUDE.md` + doc updates.
+5. **Per-question separation + question clustering** (`src/cluster.py`) — ChatGPT "🧩 Questions" tab (per-question drilldown, question×domain heatmap, clusters) + Topic Studies "Question clusters". _(latest)_
 
-## ⚠️ Current uncommitted work (working tree, NOT yet pushed)
-Last commit = `9569012`. Uncommitted = the entire **ChatGPT Bright Data mode**:
-- New: `src/brightdata.py`, `src/chatgpt_pipeline.py`, `ui/views/chatgpt.py`, `tests/test_brightdata.py`.
-- Modified: `app.py` (mode switch), `analysis.py` (made `group_compare`/`correlation_with_citation`/`features_df`/
-  `length_sim_correlation` parameterizable — Gemini defaults unchanged), `config.py`, `source_type.py` (+`.go.th` gov),
-  `storage.py` (chatgpt snapshots), `report.py` (chatgpt exports), `demo.py` (sample), `ui/charts.py`, `docs/*`.
-- **Verified:** 23 pytest pass; AppTest both modes green. **→ Open item: ask user before `git add -A && commit && push`.**
+## Repo state
+All session work is **committed & pushed to `main`** (latest commit covers per-question clustering); working tree clean.
+**27 pytest tests pass; AppTest renders both modes.** If you change code: run `pytest -q` + AppTest, then commit/push when asked.
 
 ## Key gotchas (these bit us — remember them)
 - **Bright Data INPUT vs OUTPUT files.** The `*_prompts.csv` (cols `url,prompt,country,…`) are *input* prompt lists

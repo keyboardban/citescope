@@ -239,6 +239,23 @@ def feature_heatmap(df: pd.DataFrame, max_rows: int = 24) -> go.Figure:
 
 
 # --------------------------------------------------------------------------- #
+# questions × domains (per-question / clustering)
+# --------------------------------------------------------------------------- #
+def question_domain_heatmap(df: pd.DataFrame, title: str = "Questions × domains") -> go.Figure:
+    """Heatmap: each row a question (cluster-prefixed), each column a top domain."""
+    if df is None or df.empty:
+        return _style(go.Figure(), 360)
+    indigo = [[0.0, "#f7f8fc"], [0.5, "#a5b4fc"], [1.0, COLORS["primary"]]]
+    fig = go.Figure(go.Heatmap(
+        z=df.values, x=list(df.columns), y=list(df.index),
+        colorscale=indigo, colorbar=dict(title="sources"),
+        hovertemplate="%{y}<br>%{x}: %{z}<extra></extra>"))
+    fig.update_layout(title=title)
+    fig.update_xaxes(tickangle=40)
+    return _style(fig, max(360, 30 + 22 * len(df)), legend=False)
+
+
+# --------------------------------------------------------------------------- #
 # query → candidate → citation flow (Sankey)
 # --------------------------------------------------------------------------- #
 def citation_sankey(run: dict, top_n: int = 16) -> go.Figure:

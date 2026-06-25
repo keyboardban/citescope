@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src import batch as batch_mod
-from src import config, demo, question_sets, report
+from src import cluster, config, demo, question_sets, report
 from src.analysis import FEATURE_LABELS, PRE_ANSWER_FEATURES
 
 from .. import charts
@@ -168,6 +168,26 @@ def _show(study: dict) -> None:
     if not corr.empty:
         st.plotly_chart(charts.recall_grouped(agg.get("recall") or {}), width="stretch")
         st.caption("Feature↔citation correlations are in the per-topic tables; small samples are noisy.")
+
+    # Question clusters across topics.
+    feats = study.get("features")
+    if feats:
+        C.section("Question clusters (across topics)",
+                  "Group questions by the websites they cite — do they cluster by topic, or cut across?", "🔠")
+        n_q = len({(r.get("record_id") or r.get("run_id")) for r in feats})
+        if n_q >= 3:
+            kk = st.slider("Number of clusters", 2, min(8, n_q - 1), min(3, n_q - 1), key="topic_k")
+            st.plotly_chart(charts.question_domain_heatmap(
+                cluster.clustered_question_matrix(feats, "cited", kk),
+                "Questions × top cited domains (rows grouped by cluster)"), width="stretch")
+            crows = [{
+                "cluster": c["cluster"], "size": c["size"],
+                "topics": ", ".join(sorted({m["topic"] for m in c["members"] if m["topic"]})),
+                "top_domains": ", ".join(d["domain"] for d in c["top_domains"][:5]),
+            } for c in cluster.cluster_questions(feats, "cited", kk)]
+            st.dataframe(pd.DataFrame(crows), width="stretch", hide_index=True)
+        else:
+            st.caption("Run ≥3 prompts to enable clustering.")
 
     # Export.
     C.section("Export", icon="📤")

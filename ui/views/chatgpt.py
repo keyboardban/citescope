@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src import brightdata, chatgpt_pipeline as cgp
-from src import config, demo, report, storage
+from src import cluster, config, demo, report, storage
 from src.analysis import features_df
 from src.config import CRAWLER_TYPES
 from src.pipeline import make_sim_engine
@@ -49,7 +49,7 @@ def render() -> None:
         _recompute()
 
     tabs = st.tabs(["📤 Upload", "📄 Records", "🔗 Source Table", "🕸️ Scrape Sources",
-                    "📈 Feature Analysis", "🔬 Content", "📊 Report"])
+                    "📈 Feature Analysis", "🧩 Questions", "🔬 Content", "📊 Report"])
     with tabs[0]:
         _tab_upload(ss)
     with tabs[1]:
@@ -61,8 +61,10 @@ def render() -> None:
     with tabs[4]:
         _tab_analysis(ss)
     with tabs[5]:
-        _tab_content(ss)
+        _tab_questions(ss)
     with tabs[6]:
+        _tab_content(ss)
+    with tabs[7]:
         _tab_report(ss)
 
 
@@ -278,6 +280,60 @@ def _tab_analysis(ss) -> None:
     with d2:
         st.markdown("**More-only**")
         st.dataframe(pd.DataFrame(an.get("top_domains_more") or []), width="stretch", hide_index=True)
+
+
+def _tab_questions(ss) -> None:
+    C.section("Questions & clusters",
+              "Each question's cited/searched sites, and questions grouped by shared websites.", "🧩")
+    feats = ss.get("cg_features")
+    if not feats:
+        C.empty_state("Parse a file first (Upload tab).", "🧩")
+        return
+    grp_label = {"cited": "cited sources", "all": "all surfaced sources", "more_only": "more-only sources"}
+    grp = st.radio("Group questions by", list(grp_label), format_func=lambda g: grp_label[g],
+                   horizontal=True, key="cg_q_group")
+
+    qt = cluster.question_table(feats)
+    st.dataframe(qt, width="stretch", hide_index=True,
+                 column_config={"prompt": st.column_config.TextColumn("prompt", width="large")})
+
+    C.section("Inspect one question", icon="🔎")
+    labels = {f"{r.qid[:8]} · {r.prompt[:60]}": r.qid for r in qt.itertuples()}
+    sel = st.selectbox("Question", list(labels))
+    rid = labels[sel]
+    rows = [r for r in feats if (r.get("record_id") or r.get("run_id")) == rid]
+    drill = pd.DataFrame([{"cited": bool(r["cited"]), "domain": r.get("domain"),
+                           "source_type": r.get("source_type"), "title": r.get("title"),
+                           "url": r.get("url")} for r in rows])
+    if not drill.empty:
+        c1, c2 = st.columns(2)
+        c1.markdown(f"**Cited ({int(drill['cited'].sum())})**")
+        c1.dataframe(drill[drill["cited"]][["domain", "source_type", "title"]], width="stretch", hide_index=True)
+        c2.markdown(f"**More-only ({int((~drill['cited']).sum())})**")
+        c2.dataframe(drill[~drill["cited"]][["domain", "source_type", "title"]], width="stretch", hide_index=True)
+
+    C.section("Cluster questions by shared websites", icon="🔠")
+    n_q = len(qt)
+    if n_q < 3:
+        st.info("Need at least 3 questions to cluster.")
+        return
+    k = st.slider("Number of clusters", 2, min(8, n_q - 1), min(3, n_q - 1), key="cg_k")
+    st.plotly_chart(charts.question_domain_heatmap(
+        cluster.clustered_question_matrix(feats, grp, k),
+        f"Questions × top domains ({grp_label[grp]}; rows grouped by cluster)"), width="stretch")
+    for c in cluster.cluster_questions(feats, grp, k):
+        tag = f"Cluster {c['cluster']}" if c["cluster"] >= 0 else "Unclustered (no sources)"
+        top = ", ".join(d["domain"] for d in c["top_domains"][:4])
+        with st.expander(f"{tag} — {c['size']} question(s)" + (f" · top: {top}" if top else "")):
+            for m in c["members"]:
+                extra = f"  _{m['intent']}_" if m.get("intent") else ""
+                st.markdown(f"- {m['prompt']}{extra}")
+            if c["top_domains"]:
+                st.markdown("**Most-shared domains:** "
+                            + ", ".join(f"{d['domain']} ({d['n_questions']})" for d in c["top_domains"]))
+    C.proxy_note("Clusters group questions by overlap in the websites they "
+                 + ("cite" if grp == "cited" else "surface")
+                 + " (Jaccard distance, agglomerative). Observable grouping — not causal.")
 
 
 def _tab_content(ss) -> None:
