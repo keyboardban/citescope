@@ -48,12 +48,13 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 3. `9569012` — **Topic Studies** mode (3 packs: Healthcare/Skincare, Automotive, Real Estate + paste-many) + docs.
 4. `e3f9fce` — **ChatGPT Bright Data Source Audit** mode + input-vs-output guard + `CLAUDE.md` + doc updates.
 5. **Per-question separation + question clustering** (`src/cluster.py`) — ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters". (commit `9e31082`)
-6. **Prompt Manifest + Intent → Source Type analysis** — upload a manifest (`prompt_id,topic,intent,prompt[,country,prompt_language,expected_source_types]`), matched to records by prompt text/hash → attaches intent/topic to every record/source/feature. New "🎯 Intent" tab: intent×source-type counts+%, cited-by-intent, more-only-by-intent, cited-vs-more comparison, and expected-vs-actual. _(latest)_
+6. **Prompt Manifest + Intent → Source Type analysis** (commit `4254949`) — manifest (`prompt_id,topic,intent,prompt[,country,prompt_language,expected_source_types]`) matched to records by prompt text/hash → attaches intent/topic to every record/source/feature. "🎯 Intent" tab: intent×source-type counts+%, cited-by-intent, more-only-by-intent, cited-vs-more comparison, expected-vs-actual.
+7. **Upload limit → 500 MB** (`.streamlit/config.toml` `maxUploadSize/maxMessageSize`; needs server restart) + **AI-ready reports** — both reports now embed a feature dictionary, a feature↔citation correlation table, intent breakdowns (ChatGPT), an "how to analyze (for an AI)" guide, and the **raw per-source/candidate CSV**; ChatGPT adds an **Analysis bundle (JSON)** + per-source dataset CSV downloads. _(latest)_
 
 ## Repo state
-Latest committed = `9e31082` (clustering). **Uncommitted this session: Prompt Manifest + Intent → Source Type analysis**
-(`brightdata.parse_manifest`/`apply_manifest`, `chatgpt_pipeline.intent_*`, `ui/views/chatgpt.py` 🎯 Intent tab, report/demo/tests).
-**32 pytest tests pass; AppTest renders both modes.** If you change code: run `pytest -q` + AppTest, then commit/push when the user asks.
+Latest committed = `4254949` (manifest/intent). **Uncommitted this session:** upload limit → 500 MB + **AI-ready reports**
+(`report.py` data-dictionary/correlation/embedded-CSV/`chatgpt_analysis_json`/`chatgpt_dataset_csv`, `ui/views/chatgpt.py` Report tab, `.streamlit/config.toml`, `docs/DEVELOPMENT.md`, `tests/test_report.py`).
+**36 pytest tests pass; AppTest renders both modes.** If you change code: run `pytest -q` + AppTest, then commit/push when the user asks.
 
 ## Key gotchas (these bit us — remember them)
 - **Bright Data INPUT vs OUTPUT files.** The `*_prompts.csv` (cols `url,prompt,country,…`) are *input* prompt lists

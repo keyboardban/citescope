@@ -332,7 +332,7 @@ streamlit run app.py                           # manual; or AppTest headless
 - `brand_official_candidate` is a domain-token heuristic (NER would be stronger).
 - Single-run findings are anecdotal; use Batch mode for aggregated associations — and even those are observational, not causal.
 - Freshness depends on a parseable page date; embeddings/batches consume API quota.
-- **ChatGPT mode:** more-only ≠ rejected, and it is **not** ChatGPT's full internal set; no recall@K; `response_raw` extraction is best-effort; Bright Data outputs are large (10–100 MB) but within Streamlit's 200 MB upload default.
+- **ChatGPT mode:** more-only ≠ rejected, and it is **not** ChatGPT's full internal set; no recall@K; `response_raw` extraction is best-effort; Bright Data outputs are large (10–100 MB); the upload limit is set to 500 MB in `.streamlit/config.toml` (`server.maxUploadSize`).
 
 ## 7. Future work
 

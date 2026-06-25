@@ -12,6 +12,8 @@ font = "sans serif"
 [server]
 headless = true
 runOnSave = true
+maxUploadSize = 500        # MB — Bright Data result files can be large (default is 200)
+maxMessageSize = 500       # MB — keep in step with maxUploadSize
 
 [browser]
 gatherUsageStats = false

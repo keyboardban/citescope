@@ -493,19 +493,25 @@ def _tab_report(ss) -> None:
     an = ss.get("cg_analysis") or {}
     feats = ss.get("cg_features") or []
     rid = run["run_id"]
-    intent_sum = cgp.intent_summary(feats) if run.get("has_intent") else None
-    expected = cgp.expected_vs_actual(feats) if run.get("manifest", {}).get("has_expected") else None
-    md = report.chatgpt_markdown_report(run, an, intent_sum, expected)
+    md = report.chatgpt_markdown_report(run, an, feats)
+    st.caption("The **AI-ready report** embeds a feature dictionary, a feature↔citation correlation table, "
+               "intent → source-type breakdowns, and the raw per-source data — paste it (or the JSON bundle) "
+               "into an AI to find correlations.")
     c = st.columns(3)
-    c[0].download_button("⬇️ Source table (CSV)", report.chatgpt_sources_csv(run),
-                         f"{rid}_sources.csv", "text/csv", width="stretch")
-    c[1].download_button("⬇️ Feature table (CSV)", report.chatgpt_features_csv(feats),
-                         f"{rid}_features.csv", "text/csv", width="stretch")
-    c[2].download_button("⬇️ Report (Markdown)", md, f"{rid}_report.md", "text/markdown", width="stretch")
+    c[0].download_button("⬇️ AI-ready report (Markdown)", md, f"{rid}_report.md", "text/markdown", width="stretch")
+    c[1].download_button("⬇️ Analysis bundle (JSON)", report.chatgpt_analysis_json(run, an, feats),
+                         f"{rid}_analysis.json", "application/json", width="stretch")
+    c[2].download_button("⬇️ Per-source dataset (CSV)", report.chatgpt_dataset_csv(feats),
+                         f"{rid}_dataset.csv", "text/csv", width="stretch")
+    c2 = st.columns(3)
+    c2[0].download_button("⬇️ Source table (CSV)", report.chatgpt_sources_csv(run),
+                          f"{rid}_sources.csv", "text/csv", width="stretch")
+    c2[1].download_button("⬇️ Feature table (CSV)", report.chatgpt_features_csv(feats),
+                          f"{rid}_features.csv", "text/csv", width="stretch")
     if run.get("has_intent"):
-        st.download_button("⬇️ Intent × source-type (CSV)",
-                           report.chatgpt_intent_csv(cgp.intent_source_long(feats)),
-                           f"{rid}_intent.csv", "text/csv", width="stretch")
+        c2[2].download_button("⬇️ Intent × source-type (CSV)",
+                              report.chatgpt_intent_csv(cgp.intent_source_long(feats)),
+                              f"{rid}_intent.csv", "text/csv", width="stretch")
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)
         st.success(f"Saved: {path}")

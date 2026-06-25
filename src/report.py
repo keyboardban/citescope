@@ -8,6 +8,7 @@ import pandas as pd
 
 from . import config
 from .analysis import (
+    correlation_with_citation,
     features_df,
     group_compare,
     length_sim_correlation,
@@ -23,6 +24,15 @@ from .analysis import (
 def features_csv(run: dict) -> str:
     df = features_df(run.get("features") or [])
     return df.to_csv(index=False) if not df.empty else "no features\n"
+
+
+def gemini_dataset_csv(run: dict) -> str:
+    """Compact per-candidate dataset (key correlation columns only)."""
+    df = features_df(run.get("features") or [])
+    if df.empty:
+        return "no features\n"
+    cols = [c for c in _GEM_DATASET_COLS if c in df.columns]
+    return df[cols].to_csv(index=False)
 
 
 def serp_csv(run: dict) -> str:
@@ -60,6 +70,99 @@ def _recall_table(recall: dict) -> pd.DataFrame:
         "canonical": recall.get("canonical", {}).get(str(k), 0.0),
         "domain_inclusive (weak)": recall.get("domain_inclusive", {}).get(str(k), 0.0),
     } for k in ks])
+
+
+# --------------------------------------------------------------------------- #
+# AI-ready helpers: feature dictionary, embedded raw data, analysis guide
+# --------------------------------------------------------------------------- #
+_CG_DATASET_COLS = [
+    "record_id", "prompt_id", "intent", "topic", "cited", "source_group", "source_type",
+    "institutional_official", "brand_official_candidate", "source_position", "observed_rank",
+    "freshness_days", "word_count", "title_prompt_similarity", "description_prompt_similarity",
+    "page_prompt_similarity", "page_answer_similarity", "domain",
+]
+_GEM_DATASET_COLS = [
+    "candidate_id", "cited", "match_type", "strong_match", "serp_rank", "source_type",
+    "institutional_official", "brand_official_candidate", "title_query_sim", "snippet_query_sim",
+    "page_query_sim", "page_output_sim", "max_chunk_output_sim", "word_count", "freshness_days", "domain",
+]
+
+
+def _embed_csv(csv_text: str, max_rows: int = 1500) -> str:
+    lines = csv_text.splitlines()
+    note = ""
+    if len(lines) > max_rows + 1:
+        lines = [lines[0]] + lines[1:max_rows + 1]
+        note = f"\n_(showing first {max_rows} rows; full data via the CSV download)_\n"
+    return "```csv\n" + "\n".join(lines).rstrip("\n") + "\n```\n" + note
+
+
+def _data_dict_chatgpt() -> list[dict]:
+    g = {"label": "label", "meta": "meta", "pre": "pre-answer", "post": "post-output (may be circular)", "id": "id"}
+    return [
+        {"column": "cited", "group": g["label"], "meaning": "1 = ChatGPT cited; 0 = more-only (shown-but-not-cited)"},
+        {"column": "source_group", "group": g["label"], "meaning": "cited | more_only"},
+        {"column": "intent", "group": g["meta"], "meaning": "user intent (from Prompt Manifest)"},
+        {"column": "topic", "group": g["meta"], "meaning": "topic (from Prompt Manifest)"},
+        {"column": "source_type", "group": g["pre"], "meaning": "heuristic class: news/forum/review/ecommerce/government/reference/blog/..."},
+        {"column": "institutional_official", "group": g["pre"], "meaning": "gov/edu/mil/int domain (bool)"},
+        {"column": "brand_official_candidate", "group": g["pre"], "meaning": "looks like the entity's own site (heuristic, bool)"},
+        {"column": "source_position", "group": g["pre"], "meaning": "order in the source panel — NOT Google rank"},
+        {"column": "observed_rank", "group": g["pre"], "meaning": "rank from search_sources if present — NOT Google rank"},
+        {"column": "freshness_days", "group": g["pre"], "meaning": "page age in days (if a date was found)"},
+        {"column": "word_count", "group": g["pre"], "meaning": "scraped page word count (if scraped)"},
+        {"column": "title_prompt_similarity", "group": g["pre"], "meaning": "title↔prompt overlap proxy [0–1]"},
+        {"column": "description_prompt_similarity", "group": g["pre"], "meaning": "snippet↔prompt overlap [0–1]"},
+        {"column": "page_prompt_similarity", "group": g["pre"], "meaning": "page↔prompt overlap [0–1] (if scraped)"},
+        {"column": "page_answer_similarity", "group": g["post"], "meaning": "page↔ChatGPT-answer overlap [0–1] — may be circular"},
+        {"column": "domain", "group": g["id"], "meaning": "host domain"},
+    ]
+
+
+def _data_dict_gemini() -> list[dict]:
+    return [
+        {"column": "cited", "group": "label", "meaning": "1 = matched a Gemini citation (strong); 0 = non-cited candidate"},
+        {"column": "match_type", "group": "label", "meaning": "exact/normalized/final_redirect/canonical/amp/domain_only/no_match"},
+        {"column": "serp_rank", "group": "pre-answer", "meaning": "best rank in the reconstructed SERP (lower = higher)"},
+        {"column": "source_type", "group": "pre-answer", "meaning": "heuristic site class"},
+        {"column": "institutional_official", "group": "pre-answer", "meaning": "gov/edu/mil/int (bool)"},
+        {"column": "brand_official_candidate", "group": "pre-answer", "meaning": "entity's own site (heuristic, bool)"},
+        {"column": "title_query_sim", "group": "pre-answer", "meaning": "title↔query overlap [0–1]"},
+        {"column": "snippet_query_sim", "group": "pre-answer", "meaning": "snippet↔query overlap [0–1]"},
+        {"column": "page_query_sim", "group": "pre-answer", "meaning": "page↔query overlap [0–1] (if scraped)"},
+        {"column": "page_output_sim", "group": "post-output (may be circular)", "meaning": "page↔answer overlap [0–1]"},
+        {"column": "max_chunk_output_sim", "group": "post-output (may be circular)", "meaning": "best chunk↔answer overlap [0–1]"},
+        {"column": "freshness_days", "group": "pre-answer", "meaning": "page age in days (if a date was found)"},
+        {"column": "domain", "group": "id", "meaning": "host domain"},
+    ]
+
+
+def _analysis_guide(kind: str) -> str:
+    target = "more-only" if kind == "chatgpt" else "non-cited SERP candidate"
+    pos = "source_position / observed_rank" if kind == "chatgpt" else "serp_rank"
+    lines = [
+        "## How to analyze this (for an AI / analyst)",
+        f"Target = **`cited`** (1/0); each row is one source. Look for associations with cited vs **{target}**:",
+        "",
+        "1. **Per-feature correlation with `cited`** — use the correlation table + the raw CSV below. Prefer **pre-answer** features (non-circular).",
+        ("2. **Cite-rate by `source_type`, and by `intent` × `source_type`** — do different intents cite different site types?"
+         if kind == "chatgpt" else "2. **Cite-rate by `source_type`** — which site types are cited more?"),
+        f"3. **Position effect** — are cited sources higher up (`{pos}` lower) than {target}?",
+        "4. **Official/brand effect** — higher cite-rate for `institutional_official` / `brand_official_candidate`?",
+    ]
+    if kind == "chatgpt":
+        lines.append("5. **Expected vs actual** — where a manifest gave `expected_source_types`, what coverage and what unexpected types were cited?")
+    lines += [
+        "",
+        "**Caveats (please keep wording safe):**",
+        f"- '{target}' = *shown-but-not-cited*, **not rejected**.",
+        "- These are **observable associations, not causal** claims about the AI's internal retrieval.",
+        "- **Post-output** similarity (page/chunk ↔ answer) may be **circular** — the answer can be generated from cited sources.",
+        ("- `source_position`/`observed_rank` are panel order, **not** Google SERP rank."
+         if kind == "chatgpt" else "- The reconstructed SERP can differ from the AI's internal results."),
+        "",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -137,12 +240,27 @@ def markdown_report(run: dict) -> str:
             a(f"- {u}")
         a("")
 
+    corr = correlation_with_citation(df)
+    if not corr.empty:
+        a("## Feature ↔ citation correlation (point-biserial)\n")
+        a("_Correlation of each numeric feature with the cited label (−1..+1); small |r| with few rows is noisy._\n")
+        a(_md_table(corr[["feature", "phase", "corr"]]))
+
+    a("## Feature dictionary\n")
+    a(_md_table(pd.DataFrame(_data_dict_gemini())))
+    a(_analysis_guide("gemini"))
+
     a("## Limitations\n")
     a("- We observe only what the Gemini API exposes; the true internal retrieval set is unknown.\n"
       "- The reconstructed SERP can differ from the AI's results by time, region, personalization, ranking.\n"
       "- Post-output similarity may be partly circular; prefer pre-answer signals and rank.\n"
       "- Source-type / official flags and brand-candidate detection are heuristics.\n"
       "- Single-run results are anecdotal — use Batch mode for aggregated associations.\n")
+
+    if not df.empty:
+        a("## Raw per-candidate data (CSV) — for your own correlation analysis\n")
+        a("_One row per SERP candidate. Columns are defined in the feature dictionary above._\n")
+        a(_embed_csv(gemini_dataset_csv(run)))
     return "\n".join(lines)
 
 
@@ -296,8 +414,41 @@ def chatgpt_intent_csv(intent_long: list[dict]) -> str:
     return piv.to_csv()
 
 
-def chatgpt_markdown_report(run: dict, an: dict, intent_summary: list | None = None,
-                            expected: list | None = None) -> str:
+def chatgpt_dataset_csv(features: list[dict]) -> str:
+    """Compact per-source dataset (key correlation columns only)."""
+    if not features:
+        return "no features\n"
+    df = pd.DataFrame(features)
+    cols = [c for c in _CG_DATASET_COLS if c in df.columns]
+    return df[cols].to_csv(index=False)
+
+
+def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = None) -> str:
+    """Structured bundle (summary + comparisons + correlation + intent + raw rows) for an AI to parse."""
+    bundle = {
+        "run_id": run.get("run_id"), "source_file": run.get("source_file_name"),
+        "manifest": run.get("manifest"), "summary": (an or {}).get("summary"),
+        "group_compare": (an or {}).get("group_compare"),
+        "correlation": (an or {}).get("correlation"),
+        "source_breakdown": (an or {}).get("source_breakdown"),
+        "official": (an or {}).get("official"),
+        "top_domains_cited": (an or {}).get("top_domains_cited"),
+        "top_domains_more": (an or {}).get("top_domains_more"),
+        "feature_dictionary": _data_dict_chatgpt(),
+        "caveats": [config.CHATGPT_INTRO, config.CAVEAT_MORE_ONLY, config.CAVEAT_ANSWER_CG],
+    }
+    if features and run.get("has_intent"):
+        from . import chatgpt_pipeline as cgp
+        bundle["intent_source_long"] = cgp.intent_source_long(features)
+        bundle["intent_summary"] = cgp.intent_summary(features)
+        if (run.get("manifest") or {}).get("has_expected"):
+            bundle["expected_vs_actual"] = cgp.expected_vs_actual(features)
+    if features:
+        bundle["sources"] = [{k: r.get(k) for k in _CG_DATASET_COLS if k in r} for r in features]
+    return json.dumps(bundle, indent=2, default=str, ensure_ascii=False)
+
+
+def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = None) -> str:
     s = (an or {}).get("summary", {})
     lines: list[str] = []
     a = lines.append
@@ -305,6 +456,9 @@ def chatgpt_markdown_report(run: dict, an: dict, intent_summary: list | None = N
     a(f"_Generated {run.get('created_at','')} · source file: {run.get('source_file_name','')}_\n")
     a(f"> {config.CHATGPT_INTRO}\n")
     a(f"> {config.CAVEAT_MORE_ONLY}\n")
+    man = run.get("manifest") or {}
+    if man.get("applied"):
+        a(f"_Prompt Manifest applied: {man.get('matched')}/{man.get('total')} records matched → intent/topic attached._\n")
 
     a("## Sample sizes\n")
     a(_md_table(pd.DataFrame([
@@ -316,6 +470,9 @@ def chatgpt_markdown_report(run: dict, an: dict, intent_summary: list | None = N
         {"metric": "Scrape success rate", "value": s.get("scrape_success_rate", 0.0)},
     ])))
 
+    a("## Feature dictionary\n")
+    a(_md_table(pd.DataFrame(_data_dict_chatgpt())))
+
     gc = pd.DataFrame(an.get("group_compare") or [])
     cols = ["feature", "cited_mean", "noncited_mean", "cited_median", "noncited_median", "delta"]
     if not gc.empty:
@@ -325,9 +482,15 @@ def chatgpt_markdown_report(run: dict, an: dict, intent_summary: list | None = N
         a(f"> {config.CAVEAT_ANSWER_CG}\n")
         a(_md_table(gc[gc["phase"] == "post_output"][cols]))
 
+    corr = pd.DataFrame(an.get("correlation") or [])
+    if not corr.empty:
+        a("## Feature ↔ citation correlation (point-biserial)\n")
+        a("_corr of each numeric feature with `cited` (−1..+1); small |r| with few rows is noisy._\n")
+        a(_md_table(corr[["feature", "phase", "corr"]]))
+
     sb = pd.DataFrame(an.get("source_breakdown") or [])
     if not sb.empty:
-        a("## Source-type breakdown\n")
+        a("## Source-type breakdown (cite-rate per type)\n")
         a(_md_table(sb))
 
     off = an.get("official") or {}
@@ -344,18 +507,49 @@ def chatgpt_markdown_report(run: dict, an: dict, intent_summary: list | None = N
         a("## Top domains — more-only\n")
         a(_md_table(tm))
 
-    if intent_summary:
-        a("## Intent → Source Type (per-intent cited composition)\n")
-        a(_md_table(pd.DataFrame(intent_summary)))
-    if expected:
-        a("## Expected vs actual cited source types (heuristic)\n")
-        a(_md_table(pd.DataFrame(expected)[["intent", "expected", "cited_found", "expected_missing", "coverage"]]))
+    # ---- Intent → Source Type (needs a manifest applied) ----
+    if features and run.get("has_intent"):
+        from . import chatgpt_pipeline as cgp
+        ldf = pd.DataFrame(cgp.intent_source_long(features))
+        if not ldf.empty:
+            counts = ldf.pivot_table(index="intent", columns="source_type", values="n", aggfunc="sum", fill_value=0)
+            a("## Intent × Source Type — counts (all surfaced)\n")
+            a(_md_table(counts.reset_index()))
+            pct = counts.div(counts.sum(axis=1).replace(0, 1), axis=0).round(3)
+            a("## Intent × Source Type — row % within intent\n")
+            a(_md_table(pct.reset_index()))
+            cited = ldf[ldf["group"] == "cited"]
+            if not cited.empty:
+                a("## Cited source types by intent\n")
+                a(_md_table(cited.pivot_table(index="intent", columns="source_type",
+                                              values="n", aggfunc="sum", fill_value=0).reset_index()))
+            more = ldf[ldf["group"] == "more_only"]
+            if not more.empty:
+                a("## More-only (shown-but-not-cited) source types by intent\n")
+                a(_md_table(more.pivot_table(index="intent", columns="source_type",
+                                             values="n", aggfunc="sum", fill_value=0).reset_index()))
+        summ = cgp.intent_summary(features)
+        if summ:
+            a("## Per-intent cited composition\n")
+            a(_md_table(pd.DataFrame(summ)))
+        if man.get("has_expected"):
+            ev = cgp.expected_vs_actual(features)
+            if ev:
+                a("## Expected vs actual cited source types (heuristic)\n")
+                a(_md_table(pd.DataFrame(ev)))
+
+    a(_analysis_guide("chatgpt"))
 
     a("## Limitations\n")
     a("- Observable source placement only — not ChatGPT's full internal retrieval set.\n"
       "- More-only sources were not 'rejected'; they were surfaced but not marked cited.\n"
       "- Post-output similarity may be partly circular; prefer pre-answer signals.\n"
       "- No SERP recall@K here; any ordering is `source_position`/`observed_rank`, not Google rank.\n")
+
+    if features:
+        a("## Raw per-source data (CSV) — for your own correlation analysis\n")
+        a("_One row per source; `cited` is the target. Columns are in the feature dictionary above._\n")
+        a(_embed_csv(chatgpt_dataset_csv(features)))
     return "\n".join(lines)
 
 
