@@ -1,6 +1,6 @@
 # CLAUDE.md — CiteScope session recap & guide
 
-> Auto-loaded each session. Read this first to recap where we are. _Last updated: 2026-06-25._
+> Auto-loaded each session. Read this first to recap where we are. _Last updated: 2026-06-26._
 
 ## What this project is
 **CiteScope** = an AI-search **citation audit** (black-box, observational). Streamlit app.
@@ -16,13 +16,14 @@ Similarity = a *semantic overlap proxy*, not proof of use.
    Web Scraping, Citation Matching, Content Visualizer, Feature Analysis, **Topic Studies**, **Batch Mode**, Report.
 2. **ChatGPT Bright Data Source Audit** — upload a Bright Data export of ChatGPT runs → compare **cited sources**
    vs **more-only** (shown-but-not-cited). No SERP reconstruction, **no recall@K**. One tabbed page
-   (Upload · Records · Source Table · Scrape · Feature Analysis · Content · Report).
+   (Upload · Records · Source Table · Scrape · Feature Analysis · Questions · Intent · **Brand Visibility** · Content · Report).
+   The **🏷️ Brand Visibility** tab is the **Non-branded Brand Visibility Audit** layer (client vs competitor).
 
 ## Run / test
 ```bash
 source .venv/bin/activate
 streamlit run app.py                 # launch UI (no keys? click "Load demo run" / "Load sample")
-pytest -q                            # 32 tests
+pytest -q                            # 48 tests
 python -m compileall -q src ui app.py tests
 ```
 Keys live in `.env`: `GEMINI_API_KEY` (Gemini mode + embeddings), `APIFY_TOKEN` (scraping in BOTH modes).
@@ -34,9 +35,10 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 - Shared: `url_utils.py`, `chunking.py`, `similarity.py` (lexical default / Gemini embeddings),
   `source_type.py`, `retry.py`, `storage.py` (SQLite cache+runs+embeddings+batches), `config.py`, `demo.py`.
 - Topic Studies / Batch: `batch.py` (+ `question_sets.py` = 3 packs + paste parser).
-- **ChatGPT mode:** `brightdata.py` (parser + **Prompt Manifest** match), `chatgpt_pipeline.py` (features + **intent→source-type** analysis), `ui/views/chatgpt.py` (Upload/Records/Sources/Scrape/Feature/Questions/**Intent**/Content/Report).
+- **ChatGPT mode:** `brightdata.py` (parser + **Prompt Manifest** match, incl. brand-term fields), `chatgpt_pipeline.py` (features + **intent→source-type** analysis), `ui/views/chatgpt.py` (Upload/Records/Sources/Scrape/Feature/Questions/**Intent**/**Brand Visibility**/Content/Report).
 - **Per-question / clustering:** `cluster.py` (question×domain matrix + Jaccard agglomerative clustering) → ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters".
-- Docs: `docs/DEVELOPMENT.md` (full architecture + change log A–H), `docs/ARCHITECTURE_BEFORE_AFTER.md`, `docs/24_06_2026.docx`.
+- **Non-branded Brand Visibility:** `src/brand_visibility.py` (engine: term detection + record/intent/source/content/position tables) → ChatGPT "🏷️ Brand Visibility" tab + `report.py` brand exports/section + `demo.make_demo_brand_run()`.
+- Docs: `docs/DEVELOPMENT.md` (full architecture + change log A–I), `docs/ARCHITECTURE_BEFORE_AFTER.md`, `docs/24_06_2026.docx`.
 - Data (gitignored): `data/{runs,chatgpt,batches,raw,exports}/`, `data/audit.db`.
 
 ## Session history (what we built)
@@ -49,12 +51,15 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 4. `e3f9fce` — **ChatGPT Bright Data Source Audit** mode + input-vs-output guard + `CLAUDE.md` + doc updates.
 5. **Per-question separation + question clustering** (`src/cluster.py`) — ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters". (commit `9e31082`)
 6. **Prompt Manifest + Intent → Source Type analysis** (commit `4254949`) — manifest (`prompt_id,topic,intent,prompt[,country,prompt_language,expected_source_types]`) matched to records by prompt text/hash → attaches intent/topic to every record/source/feature. "🎯 Intent" tab: intent×source-type counts+%, cited-by-intent, more-only-by-intent, cited-vs-more comparison, expected-vs-actual.
-7. **Upload limit → 500 MB** (`.streamlit/config.toml` `maxUploadSize/maxMessageSize`; needs server restart) + **AI-ready reports** — both reports now embed a feature dictionary, a feature↔citation correlation table, intent breakdowns (ChatGPT), an "how to analyze (for an AI)" guide, and the **raw per-source/candidate CSV**; ChatGPT adds an **Analysis bundle (JSON)** + per-source dataset CSV downloads. _(latest)_
+7. **Upload limit → 500 MB** (`.streamlit/config.toml` `maxUploadSize/maxMessageSize`; needs server restart) + **AI-ready reports** — both reports now embed a feature dictionary, a feature↔citation correlation table, intent breakdowns (ChatGPT), an "how to analyze (for an AI)" guide, and the **raw per-source/candidate CSV**; ChatGPT adds an **Analysis bundle (JSON)** + per-source dataset CSV downloads. (commit `8ccc94d`)
+8. **Non-branded Brand Visibility Audit** (Iteration I, uncommitted) — new `src/brand_visibility.py` layer + "🏷️ Brand Visibility" tab. Manifest gains `client_brand_terms_to_detect_in_output` / `competitor_terms_to_detect_in_output` / `prompt_is_nonbranded` / `visibility_goal`. For **non-branded** prompts: detects client/competitor in prompt/answer/sources/scraped pages → record table (all prompts kept = denominator), intent rollup (denominator = non-branded prompts; client-vs-competitor cited delta + examples), source/page table (brand-matched only), bilingual heuristic **content features** + `page_type`, **cited-vs-more-only** content comparison, and **position-controlled** (1-3/4-6/7-10/11+) comparison. 6 CSV exports + report section + JSON block; offline brand demo (Thai hospital + auto). _(latest)_
 
 ## Repo state
-Latest committed = `4254949` (manifest/intent). **Uncommitted this session:** upload limit → 500 MB + **AI-ready reports**
-(`report.py` data-dictionary/correlation/embedded-CSV/`chatgpt_analysis_json`/`chatgpt_dataset_csv`, `ui/views/chatgpt.py` Report tab, `.streamlit/config.toml`, `docs/DEVELOPMENT.md`, `tests/test_report.py`).
-**36 pytest tests pass; AppTest renders both modes.** If you change code: run `pytest -q` + AppTest, then commit/push when the user asks.
+Latest committed = `8ccc94d` (AI-ready reports + 500 MB). **Uncommitted this session:** **Non-branded Brand Visibility Audit**
+(NEW `src/brand_visibility.py`; `brightdata.py` brand-term manifest fields; `report.py` 6 brand CSVs + brand section + JSON block;
+`ui/views/chatgpt.py` "🏷️ Brand Visibility" tab + Report wiring; `ui/charts.py` 3 brand charts; `config.py` brand framing/POSITION_BANDS;
+`demo.py` `make_demo_brand_run()`; `tests/test_brand_visibility.py`; `docs/DEVELOPMENT.md` Iteration I).
+**48 pytest tests pass; AppTest renders both modes incl. the Brand Visibility tab.** If you change code: run `pytest -q` + AppTest, then commit/push when the user asks.
 
 ## Key gotchas (these bit us — remember them)
 - **Bright Data INPUT vs OUTPUT files.** The `*_prompts.csv` (cols `url,prompt,country,…`) are *input* prompt lists

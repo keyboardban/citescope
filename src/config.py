@@ -157,6 +157,34 @@ CAVEAT_ANSWER_CG = (
     "sources. Treat them as overlap visualizers, not proof of source selection."
 )
 
+# --------------------------------------------------------------------------- #
+# Non-branded Brand Visibility Audit framing
+# --------------------------------------------------------------------------- #
+BRAND_VISIBILITY_INTRO = (
+    "**Non-branded Brand Visibility Audit** studies non-branded prompts that do **not** "
+    "directly mention the client brand. For each prompt it measures whether the client or a "
+    "competitor appears in the **observable** ChatGPT / Bright Data answer or source panel — "
+    "and, among surfaced pages, which content features are associated with being **cited** "
+    "rather than only **shown but not cited** (more-only). This does **not** reveal ChatGPT's "
+    "internal retrieval process; it only studies observable brand visibility and citation "
+    "behavior."
+)
+CAVEAT_BRAND_VISIBILITY = (
+    "This is an **observable brand visibility** audit, not internal retrieval analysis. "
+    "**More-only** = *shown but not cited* — it does **not** mean the source was rejected or "
+    "ignored. Content features are heuristics associated with citation; they are not proof of "
+    "why a source was cited."
+)
+
+# Optional fallback brand terms (semicolon/comma separated). The manifest is the
+# source of truth; these are used only when a record carries no terms. Kept EMPTY
+# by design so nothing brand-specific is hardcoded into the engine.
+DEFAULT_CLIENT_BRAND_TERMS: list[str] = []
+DEFAULT_COMPETITOR_BRAND_TERMS: list[str] = []
+
+# Source-position bands for the position-controlled content comparison.
+POSITION_BANDS = ("1-3", "4-6", "7-10", "11+", "unknown")
+
 
 # --------------------------------------------------------------------------- #
 # Black-box framing — reused across the UI to keep terminology honest.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from src import brightdata, chatgpt_pipeline as cgp
+from src import brand_visibility as bv, brightdata, chatgpt_pipeline as cgp
 from src import cluster, config, demo, report, storage
 from src.analysis import features_df
 from src.config import CRAWLER_TYPES
@@ -29,13 +29,27 @@ def _sim_engine():
                            clients.get("gemini"), a.get("embedding_model", "text-embedding-004"))
 
 
+def _parse_terms(text: str | None) -> list[str]:
+    """Split a pasted brand-terms box on ; | newline (commas kept inside a term)."""
+    return brightdata._split_terms(text or "")
+
+
 def _recompute() -> None:
     ss = st.session_state
     run = ss.get("cg_run")
     if not run:
         return
-    out = cgp.recompute(run, ss.get("cg_pages") or {}, _sim_engine())
+    sim = _sim_engine()
+    pages = ss.get("cg_pages") or {}
+    out = cgp.recompute(run, pages, sim)
     ss["cg_features"], ss["cg_chunks"], ss["cg_analysis"] = out["features"], out["chunks"], out["analysis"]
+    # Non-branded Brand Visibility layer — manifest terms, plus any fallback terms
+    # pasted in the Brand Visibility tab (used only where a record has no terms).
+    ss["cg_brand"] = bv.build_brand_visibility(
+        run, out["features"], pages, sim,
+        default_client_terms=_parse_terms(ss.get("cg_brand_client_terms")),
+        default_competitor_terms=_parse_terms(ss.get("cg_brand_competitor_terms")),
+    )
 
 
 def render() -> None:
@@ -49,7 +63,8 @@ def render() -> None:
         _recompute()
 
     tabs = st.tabs(["📤 Upload", "📄 Records", "🔗 Source Table", "🕸️ Scrape Sources",
-                    "📈 Feature Analysis", "🧩 Questions", "🎯 Intent", "🔬 Content", "📊 Report"])
+                    "📈 Feature Analysis", "🧩 Questions", "🎯 Intent", "🏷️ Brand Visibility",
+                    "🔬 Content", "📊 Report"])
     with tabs[0]:
         _tab_upload(ss)
     with tabs[1]:
@@ -65,8 +80,10 @@ def render() -> None:
     with tabs[6]:
         _tab_intent(ss)
     with tabs[7]:
-        _tab_content(ss)
+        _tab_brand(ss)
     with tabs[8]:
+        _tab_content(ss)
+    with tabs[9]:
         _tab_report(ss)
 
 
@@ -436,6 +453,173 @@ def _tab_intent(ss) -> None:
                        "official/brand flags. coverage = share of expected types that appeared among cited sources.")
 
 
+def _tab_brand(ss) -> None:
+    C.section("Non-branded Brand Visibility Audit",
+              "For non-branded prompts: does the client / competitor appear or get cited, and which "
+              "content features separate cited from more-only pages?", "🏷️")
+    st.info(config.BRAND_VISIBILITY_INTRO, icon="🏷️")
+
+    run = ss.get("cg_run")
+    with st.expander("🔧 Brand terms (optional fallback) · load sample", expanded=not run):
+        st.caption("Brand terms normally come from the **Prompt Manifest** "
+                   "(`client_brand_terms_to_detect_in_output` / `competitor_terms_to_detect_in_output`, "
+                   "semicolon-separated). You can also paste fallback terms here — they apply only to "
+                   "records that carry no manifest terms.")
+        c1, c2 = st.columns(2)
+        c1.text_area("Client brand terms (`;`-separated)", key="cg_brand_client_terms",
+                     placeholder="ศิริราช;Siriraj;SIPH;siphhospital.com", height=80)
+        c2.text_area("Competitor terms (`;`-separated)", key="cg_brand_competitor_terms",
+                     placeholder="Bumrungrad;bumrungrad.com;Bangkok Hospital", height=80)
+        b1, b2 = st.columns(2)
+        if b1.button("🔁 Apply terms / recompute", disabled=run is None, width="stretch"):
+            _recompute()
+            st.success("Recomputed brand visibility with the current terms.")
+        if b2.button("🧪 Load brand-visibility sample", width="stretch"):
+            d = demo.make_demo_brand_run()
+            ss.update(cg_run=d["run"], cg_pages=d["pages"], cg_features=None, cg_chunks={}, cg_analysis=None)
+            _recompute()
+            st.success(f"Loaded brand sample — {d['run']['n_records']} non-branded prompts "
+                       "with client/competitor sources + scraped pages.")
+            run = ss.get("cg_run")
+
+    if not run:
+        C.empty_state("Upload a Bright Data results file + a Prompt Manifest (Upload tab), "
+                      "or load the brand-visibility sample above.", "🏷️")
+        return
+
+    brand = ss.get("cg_brand")
+    if brand is None:
+        _recompute()
+        brand = ss.get("cg_brand")
+    if not brand:
+        return
+
+    man = run.get("manifest") or {}
+    s = brand["summary"]
+
+    # 1) status
+    C.section("Status", icon="✅")
+    C.metric_cards([
+        {"value": run.get("n_records", 0), "label": "result records"},
+        {"value": "yes" if man.get("applied") else "no", "label": "manifest applied"},
+        {"value": s["nonbranded_prompts"], "label": "non-branded prompts"},
+        {"value": len(brand.get("client_terms") or []), "label": "client terms"},
+        {"value": len(brand.get("competitor_terms") or []), "label": "competitor terms"},
+    ])
+    if not brand.get("has_terms"):
+        C.caveat_box("No client/competitor brand terms detected. Apply a Prompt Manifest with "
+                     "`client_brand_terms_to_detect_in_output` / `competitor_terms_to_detect_in_output`, "
+                     "or paste fallback terms above. The record-level table below still works as the "
+                     "visibility denominator.")
+    else:
+        st.caption("**Client terms:** " + ", ".join(brand["client_terms"])
+                   + "  ·  **Competitor terms:** " + ", ".join(brand["competitor_terms"]))
+    C.caveat_box(config.CAVEAT_BRAND_VISIBILITY)
+
+    # 2) overall visibility
+    C.section("Observable brand visibility", icon="📊")
+    C.metric_cards([
+        {"value": C.pct(s["client_appeared_rate"]), "label": "client appeared"},
+        {"value": C.pct(s["client_cited_rate"]), "label": "client cited"},
+        {"value": C.pct(s["competitor_appeared_rate"]), "label": "competitor appeared"},
+        {"value": C.pct(s["competitor_cited_rate"]), "label": "competitor cited"},
+        {"value": f'{s["client_vs_competitor_cited_delta"]:+.2f}', "label": "client−comp cited Δ"},
+    ])
+    st.plotly_chart(charts.brand_overall_bar(s), width="stretch")
+
+    # 3) by intent
+    bi = brand.get("by_intent") or []
+    if bi:
+        C.section("Visibility by intent", icon="🎯")
+        st.caption("Which intents cause the client or a competitor to appear organically? "
+                   "Rates use **non-branded prompts** in each intent as the denominator.")
+        st.plotly_chart(charts.brand_visibility_intent_bar(bi), width="stretch")
+        bidf = pd.DataFrame(bi)
+        show = ["topic", "intent", "total_prompts", "nonbranded_prompts",
+                "client_appeared_rate", "client_cited_rate", "client_more_only_rate",
+                "competitor_appeared_rate", "competitor_cited_rate", "competitor_more_only_rate",
+                "client_vs_competitor_cited_delta"]
+        st.dataframe(bidf[[c for c in show if c in bidf.columns]], width="stretch", hide_index=True)
+
+    # 4) client vs competitor
+    cvc = brand.get("client_vs_competitor") or []
+    if cvc:
+        C.section("Client vs competitor", icon="⚖️")
+        st.dataframe(pd.DataFrame(cvc), width="stretch", hide_index=True)
+
+    # 5) examples
+    C.section("Example prompts", icon="💡")
+    ex = brand.get("examples") or {}
+    ex_specs = [("✅ Client was cited", "client_cited"),
+                ("🟠 Competitor cited, client absent", "competitor_cited_client_absent"),
+                ("🟡 Client appeared only as more-only", "client_more_only"),
+                ("⚪ Neither appeared", "neither_appeared")]
+    ecols = st.columns(2)
+    for i, (title, key) in enumerate(ex_specs):
+        with ecols[i % 2]:
+            items = ex.get(key) or []
+            st.markdown(f"**{title}** ({len(items)})")
+            if items:
+                st.dataframe(pd.DataFrame([{"intent": it.get("intent"), "prompt": it.get("prompt")}
+                                           for it in items]), width="stretch", hide_index=True)
+            else:
+                st.caption("_none_")
+
+    # 6) cited vs more-only content
+    sp = brand.get("source_pages") or []
+    C.section("Cited vs more-only content features", icon="🧬")
+    if not sp:
+        st.info("No client/competitor-matched sources yet. Add brand terms (and ideally scrape pages) to populate this.")
+    else:
+        st.caption(f"{len(sp)} brand-matched source page(s) · {brand.get('n_scraped_source_pages', 0)} scraped. "
+                   "Content features need scraped pages (Scrape Sources tab).")
+        grp = st.radio("Brand group", ["all", "client", "competitor"], horizontal=True, key="cg_brand_cv_group")
+        st.plotly_chart(charts.brand_feature_compare(brand.get("cited_vs_moreonly") or [], grp), width="stretch")
+        cv = pd.DataFrame(brand.get("cited_vs_moreonly") or [])
+        if not cv.empty:
+            keep = ["feature", "cited_mean", "more_only_mean", "cited_median", "more_only_median",
+                    "delta", "n_cited", "n_more_only"]
+            st.dataframe(cv[cv["group"] == grp][keep], width="stretch", hide_index=True)
+        C.proxy_note("Positive delta = feature more common/higher among CITED brand pages; negative = more "
+                     "common among MORE-ONLY (shown-but-not-cited). Observable association, not proof of selection.")
+
+        # 7) position-controlled
+        C.section("Position-controlled comparison", icon="📏")
+        st.caption("Within similar source-position bands (1-3 / 4-6 / 7-10 / 11+), which content features still "
+                   "differ between cited and more-only pages? Controls for the strong position effect.")
+        pb = pd.DataFrame(brand.get("by_position_band") or [])
+        if pb.empty:
+            st.info("Not enough positioned brand pages to band yet.")
+        else:
+            pgrp = st.radio("Brand group ", ["all", "client", "competitor"], horizontal=True, key="cg_brand_pb_group")
+            cols = ["position_band", "feature", "cited_mean", "more_only_mean", "delta", "n_cited", "n_more_only"]
+            st.dataframe(pb[pb["brand_match_group"] == pgrp][cols], width="stretch", hide_index=True)
+
+    # 8) downloads
+    C.section("Download brand-visibility exports", icon="⬇️")
+    rid = run["run_id"]
+    d1 = st.columns(3)
+    d1[0].download_button("records.csv", report.brand_visibility_records_csv(brand),
+                          f"{rid}_brand_visibility_records.csv", "text/csv", width="stretch")
+    d1[1].download_button("by_intent.csv", report.brand_visibility_by_intent_csv(brand),
+                          f"{rid}_brand_visibility_by_intent.csv", "text/csv", width="stretch")
+    d1[2].download_button("source_pages.csv", report.brand_source_pages_csv(brand),
+                          f"{rid}_brand_source_pages.csv", "text/csv", width="stretch")
+    d2 = st.columns(3)
+    d2[0].download_button("client_vs_competitor.csv", report.client_vs_competitor_visibility_csv(brand),
+                          f"{rid}_client_vs_competitor_visibility.csv", "text/csv", width="stretch")
+    d2[1].download_button("cited_vs_moreonly_content.csv", report.cited_vs_moreonly_content_features_csv(brand),
+                          f"{rid}_cited_vs_moreonly_content_features.csv", "text/csv", width="stretch")
+    d2[2].download_button("by_position_band.csv", report.content_features_by_position_band_csv(brand),
+                          f"{rid}_content_features_by_position_band.csv", "text/csv", width="stretch")
+
+    with st.expander("📄 Record-level visibility table (all prompts kept — visibility denominator)"):
+        recs = pd.DataFrame(brand.get("records") or [])
+        if "answer_text" in recs.columns:
+            recs = recs.drop(columns=["answer_text"])
+        st.dataframe(recs, width="stretch", hide_index=True)
+
+
 def _tab_content(ss) -> None:
     C.section("Content / Chunk Visualizer", icon="🔬")
     feats = ss.get("cg_features")
@@ -492,14 +676,15 @@ def _tab_report(ss) -> None:
         return
     an = ss.get("cg_analysis") or {}
     feats = ss.get("cg_features") or []
+    brand = ss.get("cg_brand")
     rid = run["run_id"]
-    md = report.chatgpt_markdown_report(run, an, feats)
+    md = report.chatgpt_markdown_report(run, an, feats, brand)
     st.caption("The **AI-ready report** embeds a feature dictionary, a feature↔citation correlation table, "
-               "intent → source-type breakdowns, and the raw per-source data — paste it (or the JSON bundle) "
-               "into an AI to find correlations.")
+               "intent → source-type breakdowns, the **Non-branded Brand Visibility Audit**, and the raw "
+               "per-source data — paste it (or the JSON bundle) into an AI to find correlations.")
     c = st.columns(3)
     c[0].download_button("⬇️ AI-ready report (Markdown)", md, f"{rid}_report.md", "text/markdown", width="stretch")
-    c[1].download_button("⬇️ Analysis bundle (JSON)", report.chatgpt_analysis_json(run, an, feats),
+    c[1].download_button("⬇️ Analysis bundle (JSON)", report.chatgpt_analysis_json(run, an, feats, brand),
                          f"{rid}_analysis.json", "application/json", width="stretch")
     c[2].download_button("⬇️ Per-source dataset (CSV)", report.chatgpt_dataset_csv(feats),
                          f"{rid}_dataset.csv", "text/csv", width="stretch")
@@ -512,6 +697,27 @@ def _tab_report(ss) -> None:
         c2[2].download_button("⬇️ Intent × source-type (CSV)",
                               report.chatgpt_intent_csv(cgp.intent_source_long(feats)),
                               f"{rid}_intent.csv", "text/csv", width="stretch")
+
+    if brand and brand.get("has_terms"):
+        st.markdown("**Non-branded Brand Visibility exports**")
+        b1 = st.columns(3)
+        b1[0].download_button("⬇️ brand_visibility_records.csv", report.brand_visibility_records_csv(brand),
+                              f"{rid}_brand_visibility_records.csv", "text/csv", width="stretch")
+        b1[1].download_button("⬇️ brand_visibility_by_intent.csv", report.brand_visibility_by_intent_csv(brand),
+                              f"{rid}_brand_visibility_by_intent.csv", "text/csv", width="stretch")
+        b1[2].download_button("⬇️ brand_source_pages.csv", report.brand_source_pages_csv(brand),
+                              f"{rid}_brand_source_pages.csv", "text/csv", width="stretch")
+        b2 = st.columns(3)
+        b2[0].download_button("⬇️ client_vs_competitor_visibility.csv",
+                              report.client_vs_competitor_visibility_csv(brand),
+                              f"{rid}_client_vs_competitor_visibility.csv", "text/csv", width="stretch")
+        b2[1].download_button("⬇️ cited_vs_moreonly_content_features.csv",
+                              report.cited_vs_moreonly_content_features_csv(brand),
+                              f"{rid}_cited_vs_moreonly_content_features.csv", "text/csv", width="stretch")
+        b2[2].download_button("⬇️ content_features_by_position_band.csv",
+                              report.content_features_by_position_band_csv(brand),
+                              f"{rid}_content_features_by_position_band.csv", "text/csv", width="stretch")
+
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)
         st.success(f"Saved: {path}")

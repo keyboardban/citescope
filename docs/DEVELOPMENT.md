@@ -309,6 +309,48 @@ A pipeline review identified that some conclusions could be misleading. This ite
 **Follow-up fix (input vs output file):** users uploaded the Bright Data **input prompt CSVs** (`*_prompts.csv`, columns `url,prompt,country,…`) which have no `citations` → an empty audit ("can't run"). The parser now sets `looks_like_input`/`n_sources`, and the Upload tab shows a clear error pointing to the **results** export (large `sd_*.json`). Real outputs parse fine (e.g. a 98 MB file → 36 records / 233 cited / 271 more-only in < 1 s).
 **Verification:** `pytest` → **23 passed** (`test_brightdata.py` covers array/CSV parse, labeling + cited-wins, URL dedup, `links_attached` fallback, input-file detection, one-row-per-source features); `AppTest` rendered **both** modes (all 10 Gemini views + the ChatGPT page with the sample) green.
 
+### Iteration I — Non-branded Brand Visibility Audit (working tree; commit pending)
+**What:** A new **analysis layer** over the ChatGPT Bright Data parser + Prompt Manifest that answers two
+business questions for **non-branded** prompts (prompts that don't name the client brand): (1) *which
+prompts/intents cause ChatGPT to surface or cite the client / competitor brands?* and (2) *among surfaced
+client/competitor pages, which content features are associated with being **cited** vs only **more-only**?*
+Gemini and existing ChatGPT behavior are untouched.
+**Why:** Move from "what gets cited in general" to a client-vs-competitor **brand visibility** question on
+organic (non-branded) demand — the core SEO/AEO use case for the Thai hospital + automotive datasets.
+**Change:**
+- **Manifest extension** (`brightdata.py`): `parse_manifest`/`apply_manifest` now read optional
+  `client_brand_terms_to_detect_in_output`, `competitor_terms_to_detect_in_output` (`;`-separated, Thai +
+  domains supported), `prompt_is_nonbranded`, `visibility_goal`; attached to every record (`has_brand_terms`).
+- **New engine module `src/brand_visibility.py`** (no Streamlit): case-insensitive/Thai-aware term detection
+  (word-boundary for ASCII, substring for domains/Thai); **record-level** table (one row per prompt, *all*
+  prompts kept as the visibility denominator) with `prompt_contains_*`, `is_nonbranded_prompt`,
+  `client/competitor_appeared/cited/more_only` + counts, `any_target_brand_*`; **intent rollup**
+  (denominator = non-branded prompts per intent, with client-vs-competitor cited delta + example prompts);
+  **source/page table** (only brand-matched sources, `brand_match_group` ∈ client/competitor/both, reusing the
+  ChatGPT feature row for similarities); heuristic bilingual **content features** (`has_faq`, `has_contact_info`,
+  `has_price_or_package`, `has_booking_or_appointment`, schema/table/bullets/author/dates, `page_type`, …);
+  **cited-vs-more-only** content comparison (all / client / competitor / per-intent); and a
+  **position-controlled** comparison (1-3 / 4-6 / 7-10 / 11+ bands) so content differences aren't just position.
+- **UI** (`ui/views/chatgpt.py`): a new **🏷️ Brand Visibility** tab (status, overall visibility, by-intent
+  table+chart, client-vs-competitor, example prompts for all four categories, cited-vs-more-only content +
+  position-controlled views, 6 CSV downloads, optional fallback brand-term boxes, and a one-click brand sample).
+  Brand is computed in `_recompute` and folded into the Report tab (Markdown + JSON bundle).
+- **Charts** (`ui/charts.py`): `brand_overall_bar`, `brand_visibility_intent_bar`, `brand_feature_compare`.
+- **Report** (`report.py`): six exports (`brand_visibility_records`, `brand_visibility_by_intent`,
+  `brand_source_pages`, `client_vs_competitor_visibility`, `cited_vs_moreonly_content_features`,
+  `content_features_by_position_band`), a **"Non-branded Brand Visibility Audit"** Markdown section, and a
+  `brand_visibility` block in the JSON bundle. Wording stays observational ("shown but not cited", never
+  "rejected"/"ignored").
+- **Config** (`config.py`): `BRAND_VISIBILITY_INTRO`, `CAVEAT_BRAND_VISIBILITY`, empty `DEFAULT_*_BRAND_TERMS`
+  fallbacks (no brands hardcoded), `POSITION_BANDS`.
+- **Demo** (`demo.py`): an offline, bilingual **non-branded** sample (Thai hospital: Siriraj/SIPH vs
+  Bumrungrad/Bangkok Hospital; automotive: TCC vs Benz BKK/Star Flag) with a brand manifest **and scraped
+  pages**, so the whole tab is explorable with no keys.
+**Verification:** `pytest -q` → **48 passed** (new `tests/test_brand_visibility.py`: manifest term fields,
+non-branded detection, answer/source detection, client-vs-competitor separation, denominator semantics,
+source-table filtering, safe wording, zero-match exports, plus Gemini/ChatGPT regression guards); compile
+clean; `AppTest` renders **both** modes incl. the populated Brand Visibility tab.
+
 ---
 
 ## 5. Testing & verification (current)

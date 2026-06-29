@@ -407,3 +407,215 @@ SAMPLE_MANIFEST = (
 def make_demo_manifest() -> dict:
     from . import brightdata
     return brightdata.parse_manifest(SAMPLE_MANIFEST, "sample_manifest.csv")
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic Brand Visibility demo (offline) — NON-BRANDED prompts where a client
+# and competitors appear (or don't) in the observable source panel. Mirrors the
+# spec's example terms (Thai hospital: Siriraj/SIPH vs Bumrungrad/Bangkok Hospital;
+# automotive: TCC vs Benz BKK/Star Flag). Includes scraped pages so content
+# features populate; cited pages are richer than more-only ones to illustrate.
+# --------------------------------------------------------------------------- #
+_BRAND_CLIENT_HOSP = "ศิริราช;Siriraj;SIPH;si.mahidol.ac.th;siphhospital.com;Mahidol University"
+_BRAND_COMP_HOSP = "Bumrungrad;บำรุงราษฎร์;bumrungrad.com;Bangkok Hospital;bangkokhospital.com"
+_BRAND_CLIENT_AUTO = "TCC;TTC;tccs.co.th;tccars;TCC Mercedes-Benz;TCC Auto"
+_BRAND_COMP_AUTO = "Benz BKK;benzbkk.com;Star Flag;starflag.co.th"
+
+
+def _rich_md(name: str) -> str:
+    """A structured, citation-friendly page (FAQ/contact/booking/price/table…)."""
+    return (
+        f"# {name}\n\n"
+        "## Services / บริการ\n"
+        "We provide comprehensive specialist services. ขั้นตอน the procedure is explained step by step.\n"
+        "- Diagnosis\n- Treatment\n- Follow-up\n\n"
+        "## Make an appointment / นัดหมาย\n"
+        "Book now to reserve an appointment (booking). ทดลองขับ / จองคิว online.\n\n"
+        "## Prices & packages / ราคาและแพ็กเกจ\n"
+        "| Package | Price |\n|---|---|\n| Basic | 1,000 |\n| Premium | 5,000 |\n\n"
+        "## Opening hours / เวลาทำการ\n"
+        "Open daily. เปิดบริการ 08:00–20:00.\n\n"
+        "## Contact / ติดต่อ\n"
+        "Phone: 02-123-4567 · email: info@example.com · address / ที่ตั้ง · แผนที่ directions.\n\n"
+        "## FAQ / คำถามที่พบบ่อย\n"
+        "- Q: How long does it take? A: About one week.\n\n"
+        "Written by the medical team · reviewed by a specialist · "
+        "Published 2026-01-10 · Last updated 2026-06-01.\n"
+    )
+
+
+def _thin_md(name: str) -> str:
+    """A thinner page (few headings, no FAQ/contact/booking signals)."""
+    return (
+        f"# {name}\n\n"
+        f"{name} is mentioned briefly on this page. It offers general information "
+        "for visitors without detailed structured sections.\n"
+    )
+
+
+# url -> "rich" | "thin" (only the brand-matched sources need scraped content)
+_BRAND_PAGE_SPECS = {
+    "https://www.siphhospital.com/en/heart-center": "rich",
+    "https://www.bumrungrad.com/en/centers/heart": "rich",
+    "https://www.bangkokhospital.com/center/heart-hospital": "thin",
+    "https://si.mahidol.ac.th/th/cardiology": "thin",
+    "https://www.bumrungrad.com/en/health-checkup": "rich",
+    "https://si.mahidol.ac.th/th/heart-checkup": "rich",
+    "https://www.bangkokhospital.com/th/heart": "thin",
+    "https://www.tccars.com/showroom": "rich",
+    "https://www.benzbkk.com/dealer": "thin",
+    "https://www.starflag.co.th/models": "thin",
+    "https://www.benzbkk.com/service-center": "rich",
+    "https://www.tccs.co.th/service": "thin",
+}
+
+
+SAMPLE_BRAND_BRIGHTDATA = [
+    {
+        "url": "https://chatgpt.com/?q=best%20hospitals%20Bangkok%20heart%20surgery",
+        "prompt": "What are the best hospitals in Bangkok for heart surgery?",
+        "answer_text_markdown": ("For heart surgery in Bangkok, Siriraj Hospital (SIPH) and Bumrungrad "
+                                 "are frequently recommended, alongside other major cardiac centers."),
+        "web_search_query": ["best heart surgery hospital Bangkok"],
+        "model": "gpt-4o", "timestamp": "2026-06-20T10:00:00Z",
+        "citations": [
+            {"url": "https://www.siphhospital.com/en/heart-center", "title": "Heart Center | Siriraj Piyamaharajkarun",
+             "description": "Cardiac surgery and heart center.", "cited": True},
+            {"url": "https://www.bumrungrad.com/en/centers/heart", "title": "Heart Institute | Bumrungrad",
+             "description": "Cardiac care.", "cited": True},
+            {"url": "https://pantip.com/topic/heart-bkk", "title": "ผ่าตัดหัวใจที่ไหนดี - Pantip", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.bangkokhospital.com/center/heart-hospital", "title": "Heart Hospital | Bangkok Hospital"},
+            {"url": "https://si.mahidol.ac.th/th/cardiology", "title": "ภาควิชาอายุรศาสตร์หัวใจ ศิริราช"},
+        ],
+        "search_sources": [],
+    },
+    {
+        "url": "https://chatgpt.com/?q=full%20health%20checkup%20Bangkok",
+        "prompt": "Where can I get a full health check-up in Bangkok?",
+        "answer_text_markdown": ("Bumrungrad and Bangkok Hospital offer comprehensive health check-up "
+                                 "packages with same-day results for visitors."),
+        "web_search_query": ["health checkup package Bangkok"],
+        "model": "gpt-4o", "timestamp": "2026-06-20T11:00:00Z",
+        "citations": [
+            {"url": "https://www.bumrungrad.com/en/health-checkup", "title": "Health Check-Up Packages | Bumrungrad",
+             "description": "Annual checkup packages.", "cited": True},
+            {"url": "https://www.healthline.com/checkup", "title": "What to expect at a checkup - Healthline", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.bangkokhospital.com/th/heart", "title": "ตรวจสุขภาพ | Bangkok Hospital"},
+        ],
+        "search_sources": [],
+    },
+    {
+        "url": "https://chatgpt.com/?q=heart%20checkup%20bangkok%20th",
+        "prompt": "ตรวจสุขภาพหัวใจที่ไหนดีในกรุงเทพ",
+        "answer_text_markdown": ("โรงพยาบาลศิริราช และ บำรุงราษฎร์ มีบริการตรวจสุขภาพหัวใจที่ครอบคลุม "
+                                 "พร้อมแพ็กเกจหลากหลาย"),
+        "web_search_query": ["ตรวจหัวใจ กรุงเทพ"],
+        "model": "gpt-4o", "timestamp": "2026-06-20T12:00:00Z",
+        "citations": [
+            {"url": "https://si.mahidol.ac.th/th/heart-checkup", "title": "ตรวจสุขภาพหัวใจ คณะแพทยศาสตร์ศิริราช", "cited": True},
+            {"url": "https://pantip.com/topic/heart-th", "title": "ตรวจหัวใจที่ไหนดี - Pantip", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.bangkokhospital.com/th/heart", "title": "ศูนย์หัวใจ | Bangkok Hospital"},
+        ],
+        "search_sources": [],
+    },
+    {
+        "url": "https://chatgpt.com/?q=best%20mercedes%20benz%20dealer%20bangkok",
+        "prompt": "Who are the best Mercedes-Benz dealers in Bangkok?",
+        "answer_text_markdown": ("TCC Mercedes-Benz (tccars) and Benz BKK are well-known authorized dealers "
+                                 "offering new models and test drives."),
+        "web_search_query": ["best Mercedes-Benz dealer Bangkok"],
+        "model": "gpt-4o", "timestamp": "2026-06-21T10:00:00Z",
+        "citations": [
+            {"url": "https://www.tccars.com/showroom", "title": "TCC Mercedes-Benz Showroom", "cited": True},
+            {"url": "https://www.benzbkk.com/dealer", "title": "Benz BKK Dealer", "cited": False},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.starflag.co.th/models", "title": "Star Flag Mercedes-Benz"},
+        ],
+        "search_sources": [],
+    },
+    {
+        "url": "https://chatgpt.com/?q=service%20mercedes%20bangkok",
+        "prompt": "Where can I service my Mercedes-Benz in Bangkok?",
+        "answer_text_markdown": ("Benz BKK operates authorized service centers in Bangkok; TCC Auto also "
+                                 "provides Mercedes-Benz servicing and maintenance."),
+        "web_search_query": ["Mercedes service center Bangkok"],
+        "model": "gpt-4o", "timestamp": "2026-06-21T11:00:00Z",
+        "citations": [
+            {"url": "https://www.benzbkk.com/service-center", "title": "Benz BKK Service Center", "cited": True},
+        ],
+        "search_sources_more": [
+            {"url": "https://www.tccs.co.th/service", "title": "TCC Auto Service"},
+        ],
+        "search_sources": [],
+    },
+    {
+        "url": "https://chatgpt.com/?q=cheapest%20ev%20charging%20thailand",
+        "prompt": "What are the cheapest EV charging stations in Thailand?",
+        "answer_text_markdown": ("EV charging networks such as EA Anywhere and PEA Volta provide widely "
+                                 "available stations across Thailand at competitive rates."),
+        "web_search_query": ["cheapest EV charging Thailand"],
+        "model": "gpt-4o", "timestamp": "2026-06-21T12:00:00Z",
+        "citations": [
+            {"url": "https://www.headlightmag.com/ev-charging", "title": "EV charging guide - Headlight Magazine", "cited": True},
+            {"url": "https://pantip.com/topic/ev-charge", "title": "ชาร์จรถ EV ที่ไหนถูก - Pantip", "cited": False},
+        ],
+        "search_sources_more": [],
+        "search_sources": [],
+    },
+]
+
+
+_BRAND_MANIFEST_ROWS = [
+    ("BV1", "Hospital", "Treatment / Cardiology", "What are the best hospitals in Bangkok for heart surgery?",
+     "TH", "en", _BRAND_CLIENT_HOSP, _BRAND_COMP_HOSP, "true", "Appear and be cited for cardiac treatment intent"),
+    ("BV2", "Hospital", "Health Check-up", "Where can I get a full health check-up in Bangkok?",
+     "TH", "en", _BRAND_CLIENT_HOSP, _BRAND_COMP_HOSP, "true", "Be cited for checkup intent"),
+    ("BV3", "Hospital", "Health Check-up", "ตรวจสุขภาพหัวใจที่ไหนดีในกรุงเทพ",
+     "TH", "th", _BRAND_CLIENT_HOSP, _BRAND_COMP_HOSP, "true", "Be cited for Thai checkup intent"),
+    ("BV4", "Automotive", "Dealer / Purchase", "Who are the best Mercedes-Benz dealers in Bangkok?",
+     "TH", "en", _BRAND_CLIENT_AUTO, _BRAND_COMP_AUTO, "true", "Appear for dealer intent"),
+    ("BV5", "Automotive", "Service", "Where can I service my Mercedes-Benz in Bangkok?",
+     "TH", "en", _BRAND_CLIENT_AUTO, _BRAND_COMP_AUTO, "true", "Be cited for service intent"),
+    ("BV6", "Automotive", "Pricing / EV", "What are the cheapest EV charging stations in Thailand?",
+     "TH", "en", _BRAND_CLIENT_AUTO, _BRAND_COMP_AUTO, "true", "Track EV intent visibility"),
+]
+
+
+def make_demo_brand_manifest() -> dict:
+    import csv as _csv
+    import io as _io
+    from . import brightdata
+    cols = ["prompt_id", "topic", "intent", "prompt", "country", "prompt_language",
+            "client_brand_terms_to_detect_in_output", "competitor_terms_to_detect_in_output",
+            "prompt_is_nonbranded", "visibility_goal"]
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(cols)
+    for row in _BRAND_MANIFEST_ROWS:
+        w.writerow(row)
+    return brightdata.parse_manifest(buf.getvalue(), "sample_brand_manifest.csv")
+
+
+def make_demo_brand_pages() -> dict:
+    pages = {}
+    for url, kind in _BRAND_PAGE_SPECS.items():
+        title = url.rstrip("/").rsplit("/", 1)[-1].replace("-", " ").title()
+        md = _rich_md(title) if kind == "rich" else _thin_md(title)
+        pages[normalize_url(url)] = _page(url, title, md, "2026-05-01")
+    return pages
+
+
+def make_demo_brand_run() -> dict:
+    """Parse the brand sample, apply the brand manifest, and return run + pages."""
+    import json as _json
+    from . import brightdata
+    run = brightdata.parse_run(_json.dumps(SAMPLE_BRAND_BRIGHTDATA), "sample_brand_brightdata.json")
+    brightdata.apply_manifest(run, make_demo_brand_manifest())
+    return {"run": run, "pages": make_demo_brand_pages()}

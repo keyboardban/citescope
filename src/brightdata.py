@@ -298,6 +298,31 @@ def _split_expected(v: Any) -> list[str]:
     return [t.strip() for t in toks if t and t.strip()]
 
 
+def _split_terms(v: Any) -> list[str]:
+    """Split a brand-term cell. Semicolon is the documented separator; pipe and
+    newline are also accepted. Commas are kept (a term may contain a comma)."""
+    if not v:
+        return []
+    toks = v if isinstance(v, list) else re.split(r"[;|\n]", str(v))
+    seen, out = set(), []
+    for t in toks:
+        t = str(t).strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out
+
+
+def _coerce_bool_opt(v: Any) -> bool | None:
+    """Like _coerce_bool but returns None when the value is absent/blank, so an
+    explicit manifest flag can be distinguished from 'not provided'."""
+    if v is None:
+        return None
+    if isinstance(v, str) and not v.strip():
+        return None
+    return _coerce_bool(v)
+
+
 def parse_manifest(raw: str | bytes, filename: str = "") -> dict:
     """Parse a Prompt Manifest into match-ready entries."""
     records, warnings = load_records(raw, filename)
@@ -320,12 +345,18 @@ def parse_manifest(raw: str | bytes, filename: str = "") -> dict:
             "country": r.get("country"),
             "prompt_language": r.get("prompt_language") or r.get("language"),
             "expected_source_types": _split_expected(r.get("expected_source_types")),
+            # Non-branded Brand Visibility fields (all optional).
+            "client_terms": _split_terms(r.get("client_brand_terms_to_detect_in_output")),
+            "competitor_terms": _split_terms(r.get("competitor_terms_to_detect_in_output")),
+            "prompt_is_nonbranded": _coerce_bool_opt(r.get("prompt_is_nonbranded")),
+            "visibility_goal": (str(r.get("visibility_goal")).strip() if r.get("visibility_goal") else ""),
             "prompt_hash": phash,
             "_key": _prompt_key(prompt),
         })
     has_expected = any(e["expected_source_types"] for e in entries)
+    has_brand_terms = any(e["client_terms"] or e["competitor_terms"] for e in entries)
     return {"entries": entries, "warnings": warnings, "columns": sorted(cols),
-            "has_expected": has_expected, "n": len(entries),
+            "has_expected": has_expected, "has_brand_terms": has_brand_terms, "n": len(entries),
             "source_file_name": filename or "manifest"}
 
 
@@ -346,6 +377,10 @@ def apply_manifest(run: dict, manifest: dict) -> dict:
             rec["intent"] = "(unmatched)"
             rec["topic"] = rec.get("topic") or "(unmatched)"
             rec["expected_source_types"] = []
+            rec.setdefault("client_terms", [])
+            rec.setdefault("competitor_terms", [])
+            rec.setdefault("prompt_is_nonbranded", None)
+            rec.setdefault("visibility_goal", "")
             unmatched.append((rec.get("prompt") or "")[:60])
         else:
             matched += 1
@@ -355,6 +390,10 @@ def apply_manifest(run: dict, manifest: dict) -> dict:
             rec["country"] = rec.get("country") or e["country"]
             rec["prompt_language"] = e["prompt_language"]
             rec["expected_source_types"] = e["expected_source_types"]
+            rec["client_terms"] = e["client_terms"]
+            rec["competitor_terms"] = e["competitor_terms"]
+            rec["prompt_is_nonbranded"] = e["prompt_is_nonbranded"]
+            rec["visibility_goal"] = e["visibility_goal"]
         for s in rec.get("sources", []):
             s["intent"] = rec.get("intent")
             s["topic"] = rec.get("topic")
@@ -363,6 +402,7 @@ def apply_manifest(run: dict, manifest: dict) -> dict:
     run["has_intent"] = True
     run["manifest"] = {"applied": True, "matched": matched, "unmatched": len(unmatched),
                        "total": len(run.get("records", [])), "has_expected": manifest.get("has_expected", False),
+                       "has_brand_terms": manifest.get("has_brand_terms", False),
                        "source_file_name": manifest.get("source_file_name")}
     return {"matched": matched, "unmatched": len(unmatched),
             "unmatched_prompts": unmatched[:10], "total": len(run.get("records", []))}

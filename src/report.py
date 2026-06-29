@@ -423,7 +423,113 @@ def chatgpt_dataset_csv(features: list[dict]) -> str:
     return df[cols].to_csv(index=False)
 
 
-def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = None) -> str:
+# --------------------------------------------------------------------------- #
+# Non-branded Brand Visibility Audit exports
+# --------------------------------------------------------------------------- #
+def _rows_csv(rows: list[dict] | None, empty_msg: str) -> str:
+    return pd.DataFrame(rows).to_csv(index=False) if rows else empty_msg
+
+
+def brand_visibility_records_csv(brand: dict) -> str:
+    return _rows_csv((brand or {}).get("records"), "no records\n")
+
+
+def brand_visibility_by_intent_csv(brand: dict) -> str:
+    return _rows_csv((brand or {}).get("by_intent"), "no intent rows\n")
+
+
+def brand_source_pages_csv(brand: dict) -> str:
+    return _rows_csv((brand or {}).get("source_pages"), "no brand-matched source pages\n")
+
+
+def client_vs_competitor_visibility_csv(brand: dict) -> str:
+    return _rows_csv((brand or {}).get("client_vs_competitor"), "no comparison rows\n")
+
+
+def cited_vs_moreonly_content_features_csv(brand: dict) -> str:
+    return _rows_csv((brand or {}).get("cited_vs_moreonly"), "no content-feature comparison\n")
+
+
+def content_features_by_position_band_csv(brand: dict) -> str:
+    return _rows_csv((brand or {}).get("by_position_band"), "no position-band comparison\n")
+
+
+def brand_visibility_markdown(brand: dict) -> str:
+    """The 'Non-branded Brand Visibility Audit' report section (observable wording)."""
+    if not brand:
+        return ""
+    s = brand.get("summary") or {}
+    lines: list[str] = []
+    a = lines.append
+    a("## Non-branded Brand Visibility Audit\n")
+    a("This section analyzes non-branded prompts that do not directly mention the client brand. "
+      "It measures whether the client or competitor appears in the observable ChatGPT/Bright Data "
+      "answer or source panel.\n")
+    a("This does not reveal ChatGPT's internal retrieval process. It only studies observable source "
+      "and citation behavior.\n")
+    a(f"> {config.CAVEAT_BRAND_VISIBILITY}\n")
+    a("**Detected brand terms** — client: "
+      + (", ".join(brand.get("client_terms") or []) or "_none_")
+      + " · competitor: " + (", ".join(brand.get("competitor_terms") or []) or "_none_") + "\n")
+
+    a("### Overall visibility (denominator = non-branded prompts)\n")
+    a(_md_table(pd.DataFrame([
+        {"metric": "Total prompts", "value": s.get("total_prompts")},
+        {"metric": "Non-branded prompts", "value": s.get("nonbranded_prompts")},
+        {"metric": "Client appeared rate", "value": s.get("client_appeared_rate")},
+        {"metric": "Client cited rate", "value": s.get("client_cited_rate")},
+        {"metric": "Client more-only rate", "value": s.get("client_more_only_rate")},
+        {"metric": "Competitor appeared rate", "value": s.get("competitor_appeared_rate")},
+        {"metric": "Competitor cited rate", "value": s.get("competitor_cited_rate")},
+        {"metric": "Client − competitor cited delta", "value": s.get("client_vs_competitor_cited_delta")},
+    ])))
+
+    bi = pd.DataFrame(brand.get("by_intent") or [])
+    if not bi.empty:
+        a("### Visibility by intent\n")
+        cols = ["topic", "intent", "nonbranded_prompts", "client_appeared_rate", "client_cited_rate",
+                "client_more_only_rate", "competitor_appeared_rate", "competitor_cited_rate",
+                "competitor_more_only_rate", "client_vs_competitor_cited_delta"]
+        a(_md_table(bi[[c for c in cols if c in bi.columns]]))
+
+    ex = brand.get("examples") or {}
+
+    def _ex_block(title: str, key: str) -> None:
+        items = ex.get(key) or []
+        if not items:
+            return
+        a(f"### {title}\n")
+        for it in items:
+            a(f"- _{it.get('intent') or ''}_ — {it.get('prompt') or ''}")
+        a("")
+
+    _ex_block("Example prompts that triggered client citation", "client_cited")
+    _ex_block("Example prompts where a competitor was cited but the client did not appear",
+              "competitor_cited_client_absent")
+    _ex_block("Example prompts where the client appeared only as more-only (shown but not cited)",
+              "client_more_only")
+    _ex_block("Example prompts where neither client nor competitor appeared", "neither_appeared")
+
+    cv = pd.DataFrame(brand.get("cited_vs_moreonly") or [])
+    if not cv.empty:
+        a("### Content features associated with cited vs more-only pages (all brand-matched)\n")
+        keep = ["feature", "cited_mean", "more_only_mean", "delta", "n_cited", "n_more_only"]
+        a(_md_table(cv[cv["group"] == "all"][keep]))
+        a("_Positive delta = feature more common/higher among **cited** brand pages; negative = more common "
+          "among **more-only** (shown-but-not-cited) pages. Boolean features are shown as rates._\n")
+
+    pb = pd.DataFrame(brand.get("by_position_band") or [])
+    if not pb.empty:
+        a("### Position-controlled content comparison (brand_match_group = all)\n")
+        keep = ["position_band", "feature", "cited_mean", "more_only_mean", "delta", "n_cited", "n_more_only"]
+        a(_md_table(pb[pb["brand_match_group"] == "all"][keep]))
+        a("_Cited vs more-only compared **within** similar source-position bands, so differences are not "
+          "merely position effects. `source_position` is panel order, not Google rank._\n")
+    return "\n".join(lines)
+
+
+def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = None,
+                          brand: dict | None = None) -> str:
     """Structured bundle (summary + comparisons + correlation + intent + raw rows) for an AI to parse."""
     bundle = {
         "run_id": run.get("run_id"), "source_file": run.get("source_file_name"),
@@ -443,12 +549,27 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
         bundle["intent_summary"] = cgp.intent_summary(features)
         if (run.get("manifest") or {}).get("has_expected"):
             bundle["expected_vs_actual"] = cgp.expected_vs_actual(features)
+    if brand and brand.get("has_terms"):
+        bundle["brand_visibility"] = {
+            "summary": brand.get("summary"),
+            "by_intent": brand.get("by_intent"),
+            "client_vs_competitor": brand.get("client_vs_competitor"),
+            "examples": brand.get("examples"),
+            "cited_vs_moreonly_content_features": brand.get("cited_vs_moreonly"),
+            "content_features_by_position_band": brand.get("by_position_band"),
+            "source_pages": brand.get("source_pages"),
+            "records": brand.get("records"),
+            "client_terms": brand.get("client_terms"),
+            "competitor_terms": brand.get("competitor_terms"),
+        }
+        bundle["caveats"].append(config.CAVEAT_BRAND_VISIBILITY)
     if features:
         bundle["sources"] = [{k: r.get(k) for k in _CG_DATASET_COLS if k in r} for r in features]
     return json.dumps(bundle, indent=2, default=str, ensure_ascii=False)
 
 
-def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = None) -> str:
+def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = None,
+                            brand: dict | None = None) -> str:
     s = (an or {}).get("summary", {})
     lines: list[str] = []
     a = lines.append
@@ -537,6 +658,10 @@ def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = N
             if ev:
                 a("## Expected vs actual cited source types (heuristic)\n")
                 a(_md_table(pd.DataFrame(ev)))
+
+    # ---- Non-branded Brand Visibility Audit (needs brand terms in the manifest) ----
+    if brand and brand.get("has_terms"):
+        a(brand_visibility_markdown(brand))
 
     a(_analysis_guide("chatgpt"))
 

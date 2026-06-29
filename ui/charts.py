@@ -403,6 +403,69 @@ def topic_feature_compare(by_topic: dict, key: str, label: str) -> go.Figure:
     return _style(fig, 320)
 
 
+# --------------------------------------------------------------------------- #
+# Non-branded Brand Visibility Audit
+# --------------------------------------------------------------------------- #
+_BRAND_SEQ = {"client": COLORS["primary"], "competitor": COLORS["weak"]}
+
+
+def brand_overall_bar(summary: dict) -> go.Figure:
+    """Client vs competitor: share of non-branded prompts where they appear / are cited."""
+    if not summary:
+        return _style(go.Figure(), 300)
+    rows = [
+        {"who": "client", "stage": "appeared", "rate": summary.get("client_appeared_rate", 0.0)},
+        {"who": "client", "stage": "cited", "rate": summary.get("client_cited_rate", 0.0)},
+        {"who": "competitor", "stage": "appeared", "rate": summary.get("competitor_appeared_rate", 0.0)},
+        {"who": "competitor", "stage": "cited", "rate": summary.get("competitor_cited_rate", 0.0)},
+    ]
+    fig = px.bar(pd.DataFrame(rows), x="stage", y="rate", color="who", barmode="group",
+                 color_discrete_map=_BRAND_SEQ, text_auto=".0%")
+    fig.update_yaxes(range=[0, 1.08], tickformat=".0%")
+    fig.update_layout(title="Observable brand visibility (share of non-branded prompts)")
+    fig.update_xaxes(title="")
+    return _style(fig, 300)
+
+
+def brand_visibility_intent_bar(by_intent: list[dict],
+                                metric_pair=("client_cited_rate", "competitor_cited_rate")) -> go.Figure:
+    """Grouped bar: client vs competitor (cited) rate per intent."""
+    rows = []
+    for r in by_intent or []:
+        topic = r.get("topic") or ""
+        lab = r.get("intent", "") + (f" · {topic}" if topic and topic != "(all)" else "")
+        rows.append({"intent": lab, "who": "client", "rate": r.get(metric_pair[0], 0.0)})
+        rows.append({"intent": lab, "who": "competitor", "rate": r.get(metric_pair[1], 0.0)})
+    d = pd.DataFrame(rows)
+    if d.empty:
+        return _style(go.Figure(), 340)
+    fig = px.bar(d, x="intent", y="rate", color="who", barmode="group", color_discrete_map=_BRAND_SEQ)
+    fig.update_yaxes(range=[0, 1.08], tickformat=".0%")
+    fig.update_layout(title="Client vs competitor cited rate by intent (non-branded prompts)")
+    fig.update_xaxes(title="", tickangle=20)
+    return _style(fig, 360)
+
+
+def brand_feature_compare(cited_vs: list[dict], group: str = "all", top: int = 12) -> go.Figure:
+    """Horizontal grouped bar: cited vs more-only mean per content feature (top |delta|)."""
+    rows = [r for r in (cited_vs or []) if r.get("group") == group
+            and (r.get("cited_mean") is not None or r.get("more_only_mean") is not None)]
+    rows = sorted(rows, key=lambda r: abs(r.get("delta") or 0), reverse=True)[:top]
+    plot = []
+    for r in rows:
+        plot.append({"feature": r["feature"], "group": "cited", "value": r.get("cited_mean") or 0})
+        plot.append({"feature": r["feature"], "group": "more-only", "value": r.get("more_only_mean") or 0})
+    d = pd.DataFrame(plot)
+    if d.empty:
+        return _style(go.Figure(), 360)
+    fig = px.bar(d, x="value", y="feature", color="group", barmode="group", orientation="h",
+                 color_discrete_map={"cited": COLORS["cited"], "more-only": COLORS["noncited"]})
+    fig.update_layout(title=f"Content features — cited vs more-only ({group} brand pages)")
+    fig.update_yaxes(title="")
+    fig.update_xaxes(title="mean (boolean features = rate)")
+    return _style(fig, max(360, 60 + 24 * len(rows)))
+
+
 def official_bar(off: dict) -> go.Figure:
     """Cite-rate for institutional-official vs brand-candidate vs other."""
     if not off:
