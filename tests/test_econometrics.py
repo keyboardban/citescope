@@ -369,7 +369,53 @@ def test_sensitivity_report_safe_wording():
         assert banned not in md
 
 
-# 23. existing ChatGPT pipeline still produces a (graceful) regression_comparison
+# 24. the FITTED ChatGPT UI renders (regression_block + sensitivity_block) — guards the
+#     misplaced-`f` class of bug that small demos can't reach (they fit nothing)
+def test_fitted_chatgpt_ui_renders():
+    from streamlit.testing.v1 import AppTest
+
+    rng = np.random.default_rng(0)
+    doms = [f"d{i}" for i in range(25)]
+    feats = []
+    for r in range(40):
+        for j in range(8):
+            pos = int(rng.integers(1, 21))
+            faq, contact, sim = int(rng.random() < 0.4), int(rng.random() < 0.4), rng.random()
+            p = 0.30 + 0.12 * faq - 0.06 * contact + 0.20 * sim - 0.10 * np.log1p(pos)
+            feats.append(dict(
+                run_id="CG-t", record_id=f"p{r}", source_id=f"s{r}-{j}",
+                cited=int(rng.random() < min(0.97, max(0.03, p))), scrape_success=True,
+                url=f"https://{rng.choice(doms)}/{j}", normalized_url=f"https://{rng.choice(doms)}/{j}",
+                domain=str(rng.choice(doms)), title="t", description="d",
+                source_position=pos, observed_rank=pos, has_faq=faq, has_contact_info=contact,
+                has_location_info=int(rng.random() < 0.3), has_phone_number=int(rng.random() < 0.3),
+                has_table=int(rng.random() < 0.3), has_bullets=int(rng.random() < 0.5),
+                has_author=int(rng.random() < 0.3), has_reviewer=int(rng.random() < 0.2),
+                page_type=str(rng.choice(["article", "product_page", "faq_page", "unknown"])),
+                freshness_days=float(rng.integers(0, 900)), word_count=int(rng.integers(100, 3000)),
+                heading_count=int(rng.integers(0, 12)), source_type=str(rng.choice(["news", "forum", "review", "blog"])),
+                intent=str(rng.choice(["Buy", "Compare", "Info"])), institutional_official=False,
+                brand_official_candidate=False, title_prompt_similarity=sim * 0.9 + rng.normal(0, 0.03),
+                description_prompt_similarity=sim * 0.8 + rng.normal(0, 0.03),
+                page_prompt_similarity=sim + rng.normal(0, 0.03),
+                max_chunk_prompt_similarity=sim + 0.05 + rng.normal(0, 0.02)))
+    an = cgp.analyze(feats)
+    assert an["regression"][0]["fitted"] and an["regression_comparison"]["fitted"]
+
+    at = AppTest.from_file("app.py", default_timeout=240).run()
+    at.session_state["audit_mode"] = "ChatGPT Bright Data Audit"
+    at.session_state["cg_run"] = {"run_id": "CG-t", "records": [], "source_file_name": "syn",
+                                  "n_records": 40, "n_cited": 1, "n_more_only": 1, "warnings": [], "manifest": {}}
+    at.session_state["cg_features"] = feats
+    at.session_state["cg_analysis"] = an
+    at.session_state["cg_chunks"] = {}
+    at.session_state["cg_pages"] = {}
+    at.session_state["cg_brand"] = {}
+    at.run()
+    assert not at.exception, f"fitted ChatGPT render raised: {at.exception}"
+
+
+# 25. existing ChatGPT pipeline still produces a (graceful) regression_comparison
 def test_pipeline_carries_regression_comparison():
     d = demo.make_demo_brand_run()
     feats = cgp.build_features(d["run"], d["pages"], SimilarityEngine("lexical"))["features"]

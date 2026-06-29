@@ -140,6 +140,12 @@ def regression_block(fits, focal_only: bool = True) -> None:
                     {"feature": r["label"], "AME": r["ame"], "se": r["se"],
                      "ci_low": r["ci_low"], "ci_high": r["ci_high"], "p": r["p"]} for r in f["ame"]]),
                     width="stretch", hide_index=True)
+        if f.get("ovb_caveat"):
+            caveat_box("**Omitted-variable note (signed).** " + f["ovb_caveat"])
+        for w in f.get("warnings", []):
+            st.caption("⚠️ " + w)
+        for asm in f.get("assumptions", []):
+            st.caption(asm)
 
 
 def sensitivity_block(mc) -> None:
@@ -201,12 +207,6 @@ def sensitivity_block(mc) -> None:
     if not grp.empty:
         with st.expander("Feature group summary"):
             st.dataframe(grp, width="stretch", hide_index=True)
-        if f.get("ovb_caveat"):
-            caveat_box("**Omitted-variable note (signed).** " + f["ovb_caveat"])
-        for w in f.get("warnings", []):
-            st.caption("⚠️ " + w)
-        for asm in f.get("assumptions", []):
-            st.caption(asm)
 
 
 def empty_state(message: str, icon: str = "🧭") -> None:
