@@ -248,6 +248,31 @@ CAVEAT_SEPARATION = (
     "Perfect/quasi-separation: a feature predicted citation flawlessly, so the logit did not "
     "converge to a finite estimate. Reporting the linear-probability-model estimate instead."
 )
+# Business-facing caveats for the sensitivity report (verbatim-safe observational wording).
+CAVEAT_MODEL_OBSERVATIONAL = (
+    "This is an observational association analysis. It estimates which observable source/page "
+    "features are associated with citation probability. It does not prove that adding a feature "
+    "will cause citation probability to increase."
+)
+CAVEAT_POSITION_DOWNSTREAM = (
+    "Source position is a strong observable placement feature. Because it may sit downstream of "
+    "relevance or source selection (a mediator / post-treatment variable), results should be "
+    "compared with and without source_position. It is observable placement/ranking, not the AI's "
+    "internal ranking."
+)
+CAVEAT_CONTACT_LOCATION = (
+    "Negative coefficients for contact/location features should not be interpreted as evidence that "
+    "contact information is bad. They may indicate that thin contact/location pages are less often "
+    "cited than answer-ready article or product pages."
+)
+CAVEAT_SIMILARITY_FEATURES = (
+    "Prompt similarity features are highly overlapping. Individual coefficients should not be "
+    "overinterpreted when VIF is high; use a reduced relevance score or one preferred similarity feature."
+)
+CAVEAT_AGE_FRESHNESS = (
+    "If older pages are positively associated with citation, this may reflect authority, index "
+    "history, or evergreen content rather than age itself."
+)
 
 
 # --------------------------------------------------------------------------- #

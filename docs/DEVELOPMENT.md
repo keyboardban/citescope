@@ -393,6 +393,28 @@ graceful paths, logit-AME ≈ LPM, separation→LPM fallback, wild bootstrap hon
 bins option, demo integration + signed-OVB framing). Compile clean; `AppTest` renders both modes with the
 regression sections (forest + AME + caveats).
 
+**Extension — sensitivity, diagnostics & safer reporting (same branch).** Added a model-comparison /
+sensitivity layer on top of `fit_citation_model`: `econometrics.model_comparison(df)` fits four
+specifications — **A** content-only, **B** +source/authority controls, **C** +`log1p(source_position)`,
+**D** reduced-similarity (a single combined `relevance_score` instead of all collinear similarity
+features) — plus a **FULL** diagnostic fit, clustering by **domain** (then `record_id`) and bootstrapping
+when clusters < 40. It emits a **model-comparison table** (each feature's Δprob across A–D → stability
+check), **VIF diagnostics** (low/moderate/high/severe), **anomaly diagnostics** (6 auto-flags: position
+dominance, severe-similarity-VIF, negative contact/location/phone, negative author/reviewer, positive age,
+large page-type, each with an observational explanation), a **grouped-feature summary** (position /
+relevance / structure / commercial / access / authority / freshness / page_type / intent), and an
+**executive summary**. Content features (`has_faq`, `page_type`, …) are now computed for **every** ChatGPT
+source in `chatgpt_pipeline.build_features` (reusing `brand_visibility.extract_content_features`), so the
+content models are possible. New: `report.forest_png` (matplotlib, guarded → PNG bytes) + four CSV
+exporters (`econometrics_model_comparison/vif_diagnostics/anomaly_diagnostics/feature_group_summary`) + a
+`_sensitivity_section` in the report + JSON block; `components.sensitivity_block` + a "Sensitivity &
+diagnostics" section in the ChatGPT analysis tab + PNG/CSV download buttons. Business-facing caveats added
+to `config.py` (observational / position-as-mediator / contact-location / similarity-overlap / age). Dep:
+`matplotlib>=3.8` (guarded, cp314-wheel-verified). Wired into `chatgpt_pipeline.analyze`
+(`regression_comparison`). **`pytest -q` → 71 passed** (7 new sensitivity tests: all outputs generated,
+forest PNG, BH per-spec, similarity high-VIF flag, safe wording, content features on every source);
+`AppTest` renders both modes incl. the sensitivity section.
+
 ---
 
 ## 5. Testing & verification (current)

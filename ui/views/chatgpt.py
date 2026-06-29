@@ -290,6 +290,11 @@ def _tab_analysis(ss) -> None:
               "clustered by prompt. The rigorous read; the correlation below is an unadjusted screen.", "📐")
     C.regression_block(an.get("regression"))
 
+    C.section("Sensitivity & diagnostics (model comparison)",
+              "Is each feature's effect stable across content → +authority → +position → reduced-similarity "
+              "specs? Plus VIF, anomaly checks, grouped interpretation, and forest plots.", "🧪")
+    C.sensitivity_block(an.get("regression_comparison"))
+
     df = features_df(feats, cgp.CHATGPT_NUMERIC)
     gc = an["group_compare"]
     gdf = pd.DataFrame(gc)
@@ -729,6 +734,35 @@ def _tab_report(ss) -> None:
         b2[2].download_button("⬇️ content_features_by_position_band.csv",
                               report.content_features_by_position_band_csv(brand),
                               f"{rid}_content_features_by_position_band.csv", "text/csv", width="stretch")
+
+    mc = an.get("regression_comparison")
+    if mc and mc.get("available"):
+        st.markdown("**Econometrics — sensitivity & diagnostics exports**")
+        e1 = st.columns(3)
+        e1[0].download_button("⬇️ econometrics_model_comparison.csv",
+                              report.econometrics_model_comparison_csv(mc),
+                              f"{rid}_econometrics_model_comparison.csv", "text/csv", width="stretch")
+        e1[1].download_button("⬇️ econometrics_vif_diagnostics.csv",
+                              report.econometrics_vif_diagnostics_csv(mc),
+                              f"{rid}_econometrics_vif_diagnostics.csv", "text/csv", width="stretch")
+        e1[2].download_button("⬇️ econometrics_anomaly_diagnostics.csv",
+                              report.econometrics_anomaly_diagnostics_csv(mc),
+                              f"{rid}_econometrics_anomaly_diagnostics.csv", "text/csv", width="stretch")
+        e2 = st.columns(3)
+        e2[0].download_button("⬇️ econometrics_feature_group_summary.csv",
+                              report.econometrics_feature_group_summary_csv(mc),
+                              f"{rid}_econometrics_feature_group_summary.csv", "text/csv", width="stretch")
+        _cmod = next((m["fit"] for m in mc.get("models", [])
+                      if m["model_name"].startswith("C") and m["fit"].get("fitted")), mc.get("diagnostic_model"))
+        _png = report.forest_png(_cmod, title="Position-adjusted citation model") if _cmod else None
+        _png2 = (report.forest_png(_cmod, exclude_groups=("authority", "page_type", "intent"),
+                                   title="Content features only") if _cmod else None)
+        if _png:
+            e2[1].download_button("⬇️ econometrics_forest_plot.png", _png,
+                                  f"{rid}_econometrics_forest_plot.png", "image/png", width="stretch")
+        if _png2:
+            e2[2].download_button("⬇️ econometrics_forest_plot_content_only.png", _png2,
+                                  f"{rid}_econometrics_forest_plot_content_only.png", "image/png", width="stretch")
 
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)

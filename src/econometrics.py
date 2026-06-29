@@ -586,3 +586,326 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
         "spec": {"focal": dm["focal_cols"], "controls": dm["control_cols"],
                  "phase_filter": spec.get("phase_filter")},
     }
+
+
+# --------------------------------------------------------------------------- #
+# Feature grouping (for grouped interpretation + anomaly checks + forest plots)
+# --------------------------------------------------------------------------- #
+FEATURE_GROUPS: dict[str, list[str]] = {
+    "position": ["source_position", "observed_rank", "serp_rank"],
+    "relevance": ["title_prompt_similarity", "description_prompt_similarity", "page_prompt_similarity",
+                  "max_chunk_prompt_similarity", "best_chunk_prompt_similarity", "relevance_score",
+                  "title_query_sim", "snippet_query_sim", "page_query_sim", "max_chunk_query_sim",
+                  "heading_prompt_match"],
+    "structure": ["has_faq", "has_table", "has_bullets", "heading_count", "has_many_headings", "has_step_by_step"],
+    "commercial": ["has_price_or_package", "price_package_page", "product_page"],
+    "access": ["has_contact_info", "has_location_info", "has_booking_or_appointment",
+               "has_phone_number", "has_email", "has_opening_hours"],
+    "authority": ["source_type", "institutional_official", "brand_official_candidate",
+                  "has_author", "has_reviewer", "has_schema", "title_contains_intent_terms",
+                  "answer_like_text_in_first_500_chars"],
+    "freshness": ["age_days", "freshness_days", "has_updated_date", "has_published_date"],
+    "page_type": ["page_type"],
+    "intent": ["intent"],
+}
+_GROUP_OF = {feat: grp for grp, feats in FEATURE_GROUPS.items() for feat in feats}
+
+_GROUP_INTERP = {
+    "position": "Observable placement/ranking (not the AI's internal ranking); may be a mediator — compare models with and without it.",
+    "relevance": "Prompt–text similarity proxies; highly overlapping — prefer one relevance feature or the combined score.",
+    "structure": "Answer-ready structure (FAQ / tables / bullets / headings).",
+    "commercial": "Commercial/transactional signals (price / package / product).",
+    "access": "Contact / booking / location signals — thin access pages may be surfaced but not cited; read by page_type.",
+    "authority": "Source-type / official / authorship signals (observational proxies for authority).",
+    "freshness": "Recency/age signals — older may proxy authority or evergreen content, not age itself.",
+    "page_type": "Heuristic page-type dummies; interpret relative to the omitted reference category.",
+    "intent": "Prompt-intent dummies (from the manifest).",
+    "other": "Uncategorized features.",
+}
+
+_ANOMALY_MESSAGES = {
+    "position_dominates": ("Source position is a strong observable placement feature and may dominate content "
+                           "features. It is observable placement/ranking — not the AI's internal ranking — and may be "
+                           "a mediator / post-treatment variable. Interpret content effects both with and without source position."),
+    "similarity_collinear": ("Similarity / relevance features overlap heavily (high VIF); do not interpret individual "
+                             "similarity coefficients separately. Use one preferred relevance feature or the combined relevance score."),
+    "access_negative": ("A negative coefficient may reflect that thin contact/location pages are surfaced but not cited "
+                        "(more-only), not that contact information is bad. Analyze by page_type."),
+    "authorship_negative": ("May be confounded with page type, article format, source position, or scraped-template "
+                            "artifacts rather than authorship itself."),
+    "age_positive": ("Older pages may proxy authority, index history, or stable evergreen content; this is not a "
+                     "recommendation to make pages old."),
+    "pagetype_large": "Large page-type coefficient — check the omitted/reference page_type category before interpreting.",
+}
+
+_DEFAULT_LABELS = {
+    "has_faq": "Has FAQ", "has_step_by_step": "Has steps", "has_contact_info": "Has contact info",
+    "has_location_info": "Has location", "has_price_or_package": "Has price/package", "has_opening_hours": "Has hours",
+    "has_booking_or_appointment": "Has booking", "has_phone_number": "Has phone", "has_email": "Has email",
+    "has_author": "Has author", "has_reviewer": "Has reviewer", "has_published_date": "Has published date",
+    "has_updated_date": "Has updated date", "has_schema": "Has schema.org", "has_table": "Has table",
+    "has_bullets": "Has bullets", "has_many_headings": "Has many headings", "heading_prompt_match": "Heading–prompt match",
+    "title_contains_intent_terms": "Title has intent terms", "answer_like_text_in_first_500_chars": "Answer-like intro",
+    "relevance_score": "Relevance score (combined)", "word_count": "Word count", "char_count": "Char count",
+    "heading_count": "Heading count", "freshness_days": "Age (days)", "institutional_official": "Institutional/official",
+    "brand_official_candidate": "Brand-official (heuristic)", "source_position": "Source position",
+    "observed_rank": "Observed rank", "serp_rank": "SERP rank", "page_type": "Page type", "source_type": "Source type",
+    "intent": "Intent", "title_prompt_similarity": "Title–prompt sim", "description_prompt_similarity": "Desc–prompt sim",
+    "page_prompt_similarity": "Page–prompt sim", "max_chunk_prompt_similarity": "Best chunk–prompt sim",
+}
+
+
+def _base_feature(name: str) -> str:
+    base = name[6:] if name.startswith("log1p_") else name
+    return base.split("=", 1)[0].split("_band", 1)[0]
+
+
+def _feature_group(name: str) -> str:
+    return _GROUP_OF.get(_base_feature(name), "other")
+
+
+def vif_level(v) -> tuple[str, str]:
+    if v is None:
+        return ("unknown", "not estimable")
+    if v < 2:
+        return ("low", "low overlap")
+    if v < 5:
+        return ("moderate", "moderate overlap")
+    if v < config.VIF_PROBLEM:
+        return ("high", "high overlap — interpret jointly")
+    return ("severe", "severe overlap — do not interpret separately")
+
+
+# Feature pools for the A/B/C/D model specifications.
+_CONTENT_FEATURES = [
+    "has_faq", "has_step_by_step", "has_contact_info", "has_location_info", "has_price_or_package",
+    "has_opening_hours", "has_booking_or_appointment", "has_phone_number", "has_email", "has_author",
+    "has_reviewer", "has_published_date", "has_updated_date", "has_schema", "has_table", "has_bullets",
+    "has_many_headings", "heading_prompt_match", "title_contains_intent_terms",
+    "answer_like_text_in_first_500_chars", "word_count", "heading_count", "freshness_days",
+]
+_SOURCE_BOOL = ["institutional_official", "brand_official_candidate"]
+_SOURCE_CATS = ["source_type", "page_type", "intent"]
+_SIM_CONTINUOUS = [
+    "title_prompt_similarity", "description_prompt_similarity", "page_prompt_similarity",
+    "max_chunk_prompt_similarity", "best_chunk_prompt_similarity",
+    "title_query_sim", "snippet_query_sim", "page_query_sim", "max_chunk_query_sim",
+]
+
+
+def _coef_by_base(coefs, *bases):
+    return [c for c in coefs if _base_feature(c["name"]) in bases]
+
+
+def _vif_rows(fit: dict) -> list[dict]:
+    rows = []
+    for c in fit.get("coefficients", []):
+        lvl, interp = vif_level(c.get("vif"))
+        rows.append({"feature": c["label"], "vif": c.get("vif"), "vif_level": lvl,
+                     "interpretation": interp, "feature_group": _feature_group(c["name"])})
+    return rows
+
+
+def _anomaly_rows(fit: dict) -> list[dict]:
+    coefs = [c for c in fit.get("coefficients", []) if c.get("estimate") is not None]
+    rows: list[dict] = []
+
+    def add(check, feats, est, p, vif, severity, msg):
+        rows.append({"check": check, "feature": feats, "estimate": est, "p": p,
+                     "vif": vif, "severity": severity, "message": msg})
+
+    # 1) position dominates
+    pos = [c for c in coefs if _feature_group(c["name"]) == "position"]
+    if pos and coefs:
+        pc = max(pos, key=lambda c: abs(c["estimate"]))
+        max_abs = max(abs(c["estimate"]) for c in coefs)
+        if pc.get("p") is not None and pc["p"] < 0.01 and abs(pc["estimate"]) >= 0.999 * max_abs:
+            add("position_dominates", pc["label"], pc["estimate"], pc["p"], pc.get("vif"), "high",
+                _ANOMALY_MESSAGES["position_dominates"])
+    # 2) similarity severe VIF
+    sim_sev = [c for c in coefs if _feature_group(c["name"]) == "relevance"
+               and c.get("vif") is not None and c["vif"] > config.VIF_PROBLEM]
+    if len(sim_sev) >= 2:
+        add("similarity_collinear", "; ".join(c["label"] for c in sim_sev), None, None,
+            max(c["vif"] for c in sim_sev), "high", _ANOMALY_MESSAGES["similarity_collinear"])
+    # 3) contact / location / phone negative
+    for c in _coef_by_base(coefs, "has_contact_info", "has_location_info", "has_phone_number"):
+        if c["estimate"] < 0:
+            add("access_negative", c["label"], c["estimate"], c.get("p"), c.get("vif"), "medium",
+                _ANOMALY_MESSAGES["access_negative"])
+    # 4) reviewer / author negative & suggestive
+    for c in _coef_by_base(coefs, "has_reviewer", "has_author"):
+        if c["estimate"] < 0 and c.get("p") is not None and c["p"] < 0.1:
+            add("authorship_negative", c["label"], c["estimate"], c["p"], c.get("vif"), "medium",
+                _ANOMALY_MESSAGES["authorship_negative"])
+    # 5) age / freshness positive & significant (freshness_days = age in days)
+    for c in _coef_by_base(coefs, "freshness_days", "age_days"):
+        if c["estimate"] > 0 and c.get("p") is not None and c["p"] < 0.05:
+            add("age_positive", c["label"], c["estimate"], c["p"], c.get("vif"), "medium",
+                _ANOMALY_MESSAGES["age_positive"])
+    # 6) page-type coefficients large
+    ref = (fit.get("diagnostics", {}).get("reference_levels", {}) or {}).get("page_type")
+    for c in coefs:
+        if _feature_group(c["name"]) == "page_type" and abs(c["estimate"]) > 0.20:
+            msg = _ANOMALY_MESSAGES["pagetype_large"] + (f" Reference category = '{ref}'." if ref else "")
+            add("pagetype_large", c["label"], c["estimate"], c.get("p"), c.get("vif"), "low", msg)
+    return rows
+
+
+def _group_rows(fit: dict) -> list[dict]:
+    from collections import defaultdict
+    groups: dict[str, list] = defaultdict(list)
+    for c in fit.get("coefficients", []):
+        groups[_feature_group(c["name"])].append(c)
+    rows = []
+    for grp in sorted(groups):
+        cs = groups[grp]
+        est = [c for c in cs if c.get("estimate") is not None]
+        pos = sorted((c for c in est if c["estimate"] > 0), key=lambda c: -c["estimate"])[:3]
+        neg = sorted((c for c in est if c["estimate"] < 0), key=lambda c: c["estimate"])[:3]
+        rows.append({
+            "feature_group": grp, "num_features": len(cs),
+            "top_positive_features": ", ".join(c["label"] for c in pos),
+            "top_negative_features": ", ".join(c["label"] for c in neg),
+            "num_significant_p_05": sum(1 for c in cs if c.get("p") is not None and c["p"] < 0.05),
+            "num_significant_q_10": sum(1 for c in cs if c.get("p_adj") is not None and c["p_adj"] < 0.10),
+            "interpretation": _GROUP_INTERP.get(grp, ""),
+        })
+    return rows
+
+
+def _exec_summary(diag: dict, models: list[dict], cluster_var, cluster_count) -> list[str]:
+    out: list[str] = []
+    coefs = [c for c in diag.get("coefficients", []) if c.get("estimate") is not None]
+    # exclude severe-collinearity coefs from the "strongest" picks — their magnitude is unreliable
+    reliable = [c for c in coefs if not (c.get("vif") is not None and c["vif"] >= config.VIF_PROBLEM)]
+    sig = [c for c in reliable if c.get("p") is not None and c["p"] < 0.05]
+    if sig:
+        top = max(sig, key=lambda c: abs(c["estimate"]))
+        grp = _feature_group(top["name"])
+        out.append(f"Strongest observable predictor: **{top['label']}** ({top['estimate']:+.3f} prob.) "
+                   f"— group *{grp}*" + (" (position is observable placement, not internal AI ranking)."
+                                         if grp == "position" else "."))
+    content = [c for c in sig if _feature_group(c["name"]) in ("structure", "commercial", "access", "page_type")]
+    if content:
+        names = ", ".join(f"{c['label']} ({c['estimate']:+.3f})"
+                          for c in sorted(content, key=lambda c: -abs(c["estimate"]))[:4])
+        out.append(f"Strongest content / page-type signals: {names}.")
+    uncertain = [c for c in coefs if c.get("p") is not None and c["p"] >= 0.05
+                 and c.get("ci_low") is not None and (c["ci_high"] - c["ci_low"]) > 0.10]
+    if uncertain:
+        out.append("Uncertain estimates (wide CI, not distinguishable from zero): "
+                   + ", ".join(c["label"] for c in uncertain[:6]) + ".")
+    high_vif = [c["label"] for c in coefs if c.get("vif") is not None and c["vif"] >= config.VIF_PROBLEM]
+    if high_vif:
+        out.append("Caution — severe multicollinearity (VIF ≥ 10), do not read individually: "
+                   + ", ".join(high_vif[:6]) + ".")
+    if cluster_count is not None:
+        note = f"Standard errors clustered by **{cluster_var}** ({cluster_count} clusters)."
+        if cluster_count < config.MIN_CLUSTERS:
+            note += " Few clusters — focal CIs use the wild cluster bootstrap; treat significance cautiously."
+        out.append(note)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# model comparison / sensitivity analysis (A / B / C / D + a FULL diagnostic fit)
+# --------------------------------------------------------------------------- #
+def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str = "source_position",
+                     position_fallbacks=("observed_rank",), cluster_candidates=("domain", "record_id", "run_id"),
+                     labels: dict | None = None, phase_map: dict | None = None) -> dict:
+    """Fit content-only (A), +source/authority (B), +position (C), and reduced-similarity (D)
+    specifications, plus a FULL diagnostic fit, and return the comparison table + VIF /
+    anomaly / grouped-feature diagnostics + an executive summary. Sensitivity = whether each
+    feature's coefficient is stable across specifications."""
+    empty = {"available": HAVE_STATSMODELS, "fitted": False, "context": context, "models": [],
+             "comparison_rows": [], "vif_rows": [], "anomaly_rows": [], "group_rows": [],
+             "executive_summary": [], "cluster_variable": None, "cluster_count": None, "warnings": []}
+    if not HAVE_STATSMODELS:
+        empty["warnings"] = [f"statsmodels not installed ({_IMPORT_ERROR})."]
+        return empty
+    if df is None or df.empty or "cited" not in df.columns:
+        return empty
+
+    labels = {**_DEFAULT_LABELS, **(labels or {})}
+    work = df.copy()
+
+    # combined relevance score (standardized mean of available similarity features) for Model D
+    sims = [c for c in _SIM_CONTINUOUS if c in work.columns
+            and pd.to_numeric(work[c], errors="coerce").notna().sum() > 3]
+    if sims:
+        Z = work[sims].apply(pd.to_numeric, errors="coerce")
+        work["relevance_score"] = ((Z - Z.mean()) / Z.std(ddof=0).replace(0, 1)).mean(axis=1)
+
+    # cluster: prefer domain, then record_id / run_id
+    cluster_key, cluster_count = None, None
+    for cand in cluster_candidates:
+        if cand in work.columns:
+            nun = int(work[cand].astype("string").nunique(dropna=True))
+            if nun >= 2:
+                cluster_key, cluster_count = cand, nun
+                break
+
+    content = [c for c in _CONTENT_FEATURES if c in work.columns]
+    src_bool = [c for c in _SOURCE_BOOL if c in work.columns]
+    cats = [c for c in _SOURCE_CATS if c in work.columns]
+    has_pos = position_col in work.columns or any(f in work.columns for f in position_fallbacks)
+
+    def _spec(title, focal, with_cats, with_pos, notes):
+        return (title, notes, build_spec(
+            focal=focal, position_col=(position_col if with_pos else None),
+            position_fallbacks=(list(position_fallbacks) if with_pos else []),
+            categoricals=(cats if with_cats else []), cluster_key=cluster_key, phase_map=phase_map or {},
+            labels=labels, context=context, title=title, crosscheck_logit=False, wild_bootstrap=True))
+
+    rel = ["relevance_score"] if "relevance_score" in work.columns else []
+    specs = [
+        _spec("A · content only", content, False, False, "content/page features only"),
+        _spec("B · + source/authority", content + src_bool, True, False,
+              "A + source_type / official / brand / page_type / intent"),
+        _spec("C · + source position", content + src_bool, True, True, "B + log1p(source_position)"),
+        _spec("D · reduced similarity", content + src_bool + rel, True, True,
+              "C + a single combined relevance_score (not all similarity features)"),
+    ]
+    models = []
+    for title, notes, spec in specs:
+        models.append({"model_name": title, "spec_notes": notes, "fit": fit_citation_model(work, spec)})
+
+    # FULL diagnostic fit: everything incl. all (collinear) similarity features → surfaces VIF
+    full_focal = content + src_bool + [c for c in _SIM_CONTINUOUS if c in work.columns]
+    _, _, full_spec = _spec("FULL · all features (diagnostic)", full_focal, True, has_pos, "all features incl. raw similarities")
+    full = fit_citation_model(work, full_spec)
+    diag = full if full.get("fitted") else next((m["fit"] for m in reversed(models) if m["fit"].get("fitted")), full)
+
+    comparison_rows = []
+    for m in models:
+        f = m["fit"]
+        if not f.get("fitted"):
+            continue
+        for c in f["coefficients"]:
+            if not c.get("is_focal"):
+                continue
+            comparison_rows.append({
+                "feature": c["label"], "model_name": m["model_name"], "delta_prob": c["estimate"],
+                "se": c["se"], "ci_low": c["ci_low"], "ci_high": c["ci_high"], "p": c["p"],
+                "q_bh": c.get("p_adj"), "vif": c.get("vif"), "n": f["n"],
+                "cluster_variable": f.get("cluster_key"), "cluster_count": f.get("n_clusters"),
+                "spec_notes": m["spec_notes"],
+            })
+
+    warnings = list(diag.get("warnings", []))
+    sim_sev = [c for c in diag.get("coefficients", []) if _feature_group(c["name"]) == "relevance"
+               and c.get("vif") is not None and c["vif"] > config.VIF_PROBLEM]
+    if len(sim_sev) >= 2:
+        warnings.append("Similarity/relevance features have severe VIF (>10) as a group — reduce them to a "
+                        "single relevance score (Model D) rather than interpreting them separately.")
+
+    return {
+        "available": True, "fitted": bool(diag.get("fitted")), "context": context,
+        "cluster_variable": cluster_key, "cluster_count": cluster_count,
+        "models": models, "full_model": full, "diagnostic_model": diag,
+        "comparison_rows": comparison_rows, "vif_rows": _vif_rows(diag),
+        "anomaly_rows": _anomaly_rows(diag), "group_rows": _group_rows(diag),
+        "executive_summary": _exec_summary(diag, models, cluster_key, cluster_count),
+        "warnings": warnings,
+    }

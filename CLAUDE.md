@@ -23,7 +23,7 @@ Similarity = a *semantic overlap proxy*, not proof of use.
 ```bash
 source .venv/bin/activate
 streamlit run app.py                 # launch UI (no keys? click "Load demo run" / "Load sample")
-pytest -q                            # 65 tests
+pytest -q                            # 71 tests
 python -m compileall -q src ui app.py tests
 ```
 Keys live in `.env`: `GEMINI_API_KEY` (Gemini mode + embeddings), `APIFY_TOKEN` (scraping in BOTH modes).
@@ -38,7 +38,8 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 - **ChatGPT mode:** `brightdata.py` (parser + **Prompt Manifest** match, incl. brand-term fields), `chatgpt_pipeline.py` (features + **intent→source-type** analysis), `ui/views/chatgpt.py` (Upload/Records/Sources/Scrape/Feature/Questions/**Intent**/**Brand Visibility**/Content/Report).
 - **Per-question / clustering:** `cluster.py` (question×domain matrix + Jaccard agglomerative clustering) → ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters".
 - **Non-branded Brand Visibility:** `src/brand_visibility.py` (engine: term detection + record/intent/source/content/position tables) → ChatGPT "🏷️ Brand Visibility" tab + `report.py` brand exports/section + `demo.make_demo_brand_run()`.
-- **Econometrics (citation model):** `src/econometrics.py` (statsmodels, guarded) — position-adjusted **LPM** (`cited`∼features) with **HC3 / cluster-robust** SEs, **wild cluster bootstrap** (<40 clusters), **VIF**, **Benjamini–Hochberg**, **logit+AME** cross-check. Wired via `analysis.econometric_analysis` into `stage_analyze` / `chatgpt_pipeline.analyze` (cluster `record_id`) / `batch.aggregate` (cluster `run_id`) / `brand_visibility.position_adjusted_regression`; rendered by `charts.coefficient_forest` + `components.regression_block` ("Position-adjusted citation model" sections) + report/JSON. **Cautious effect estimates under stated assumptions + a signed OVB caveat — a scoped exception to the observational rule.** Deps: `statsmodels`/`scipy` (wheel-verified on 3.14).
+- **Econometrics (citation model):** `src/econometrics.py` (statsmodels, guarded) — position-adjusted **LPM** (`cited`∼features) with **HC3 / cluster-robust** SEs, **wild cluster bootstrap** (<40 clusters), **VIF**, **Benjamini–Hochberg**, **logit+AME** cross-check. Wired via `analysis.econometric_analysis` into `stage_analyze` / `chatgpt_pipeline.analyze` (cluster `record_id`) / `batch.aggregate` (cluster `run_id`) / `brand_visibility.position_adjusted_regression`; rendered by `charts.coefficient_forest` + `components.regression_block` + report/JSON. **Cautious effect estimates under stated assumptions + a signed OVB caveat — a scoped exception to the observational rule.** Deps: `statsmodels`/`scipy` (wheel-verified on 3.14).
+  - **Sensitivity & diagnostics:** `econometrics.model_comparison(df)` fits **A** content / **B** +source-authority / **C** +position / **D** reduced-similarity (+ FULL diagnostic), clustered by **domain** → model-comparison table (Δprob stability across A–D) + **VIF**, **anomaly** (6 auto-flags), **grouped-feature**, and **executive-summary** tables. Content features (`has_faq`, `page_type`, …) now computed for **every** ChatGPT source in `chatgpt_pipeline.build_features`. `report.forest_png` (matplotlib, guarded) + 4 CSV exporters (`econometrics_model_comparison/vif_diagnostics/anomaly_diagnostics/feature_group_summary`) + `report._sensitivity_section` + `components.sensitivity_block` (ChatGPT analysis tab "🧪 Sensitivity & diagnostics" + report-tab CSV/PNG downloads). Business caveats in `config.py` (observational / position-mediator / contact-location / similarity / age). Dep: `matplotlib` (guarded).
 - Docs: `docs/DEVELOPMENT.md` (full architecture + change log A–I), `docs/ARCHITECTURE_BEFORE_AFTER.md`, `docs/24_06_2026.docx`.
 - Data (gitignored): `data/{runs,chatgpt,batches,raw,exports}/`, `data/audit.db`.
 
@@ -61,8 +62,12 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 holding the **Econometrics citation-model layer** (NEW `src/econometrics.py`; `analysis.econometric_analysis`; wiring in
 `pipeline`/`chatgpt_pipeline`/`batch`/`brand_visibility`; `report.py` regression section + JSON; `ui/charts.coefficient_forest` +
 `components.regression_block` + view sections; `config.py` econ caveats/thresholds; `requirements.txt` statsmodels+scipy;
-`tests/test_econometrics.py`; demo similarity de-correlated; `docs/DEVELOPMENT.md` Iteration J).
-**65 pytest tests pass; AppTest renders both modes incl. the regression sections.** Untracked reference files
+`tests/test_econometrics.py`; demo similarity de-correlated; `docs/DEVELOPMENT.md` Iteration J) **plus a
+sensitivity/diagnostics extension** (`econometrics.model_comparison` + A/B/C/D specs + VIF/anomaly/group/
+exec-summary tables; content features on every ChatGPT source; `report.forest_png` + 4 CSV exporters +
+`_sensitivity_section`; `components.sensitivity_block` + ChatGPT analysis/report UI; `config.py` business
+caveats; `requirements.txt` matplotlib).
+**71 pytest tests pass; AppTest renders both modes incl. the regression + sensitivity sections.** Untracked reference files
 (textbook PDFs, `docs/demo/` HTML, `scripts/`) deliberately left uncommitted (public repo — copyright/size). If you change
 code: run `pytest -q` + AppTest, then commit/push when the user asks.
 

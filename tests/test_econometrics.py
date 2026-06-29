@@ -8,7 +8,8 @@ import json
 import numpy as np
 import pandas as pd
 
-from src import analysis, demo, econometrics as E, report
+from src import analysis, chatgpt_pipeline as cgp, demo, econometrics as E, report
+from src.similarity import SimilarityEngine
 
 
 def _coef(res, name):
@@ -275,3 +276,104 @@ def test_integration_and_framing():
     assert "omitted-variable note" in md                       # signed caveat present
     for banned in ("proves causation", "causally proven", "rejected this source"):
         assert banned not in md
+
+
+# =========================================================================== #
+# Sensitivity analysis / model comparison + diagnostics (A/B/C/D + FULL)
+# =========================================================================== #
+def _source_df(n_prompts=40, per=8, seed=0):
+    """A realistically-sized source-level frame with content features, (collinear)
+    similarity features, position, domain, page_type, intent — enough rows to fit."""
+    rng = np.random.default_rng(seed)
+    doms = [f"d{i}" for i in range(25)]
+    rows = []
+    for r in range(n_prompts):
+        for _ in range(per):
+            pos = int(rng.integers(1, 21))
+            faq, contact, sim = int(rng.random() < 0.4), int(rng.random() < 0.4), rng.random()
+            p = 0.30 + 0.12 * faq - 0.06 * contact + 0.20 * sim - 0.10 * np.log1p(pos)
+            rows.append(dict(
+                record_id=f"p{r}", domain=str(rng.choice(doms)),
+                cited=int(rng.random() < min(0.97, max(0.03, p))), source_position=pos,
+                has_faq=faq, has_contact_info=contact, has_location_info=int(rng.random() < 0.3),
+                has_phone_number=int(rng.random() < 0.3), has_table=int(rng.random() < 0.3),
+                has_bullets=int(rng.random() < 0.5), has_author=int(rng.random() < 0.3),
+                has_reviewer=int(rng.random() < 0.2), freshness_days=float(rng.integers(0, 900)),
+                word_count=int(rng.integers(100, 3000)), heading_count=int(rng.integers(0, 12)),
+                source_type=str(rng.choice(["news", "forum", "review", "blog"])),
+                page_type=str(rng.choice(["article", "product_page", "faq_page", "contact_page", "unknown"])),
+                intent=str(rng.choice(["Buy", "Compare", "Info"])),
+                institutional_official=False, brand_official_candidate=False,
+                title_prompt_similarity=sim * 0.9 + rng.normal(0, 0.03),
+                description_prompt_similarity=sim * 0.8 + rng.normal(0, 0.03),
+                page_prompt_similarity=sim + rng.normal(0, 0.03),
+                max_chunk_prompt_similarity=sim + 0.05 + rng.normal(0, 0.02)))
+    return pd.DataFrame(rows)
+
+
+# 18. all sensitivity outputs are generated and the CSV exporters work
+def test_model_comparison_generates_outputs():
+    mc = E.model_comparison(_source_df(seed=2), context="chatgpt")
+    assert mc["available"] and mc["fitted"]
+    assert sum(1 for m in mc["models"] if m["fit"].get("fitted")) == 4      # A/B/C/D fit
+    assert mc["comparison_rows"] and mc["vif_rows"] and mc["anomaly_rows"] and mc["group_rows"]
+    assert mc["executive_summary"]
+    for fn, head in [(report.econometrics_model_comparison_csv, "feature,model_name,delta_prob"),
+                     (report.econometrics_vif_diagnostics_csv, "feature,vif,vif_level,interpretation"),
+                     (report.econometrics_anomaly_diagnostics_csv, "check,feature"),
+                     (report.econometrics_feature_group_summary_csv, "feature_group,num_features")]:
+        out = fn(mc)
+        assert isinstance(out, str) and out.startswith(head) and len(out.splitlines()) > 1
+
+
+# 19. forest plot PNG is generated when focal features exist (+ content-only variant)
+def test_forest_png_generated():
+    mc = E.model_comparison(_source_df(seed=3), context="chatgpt")
+    cmod = next(m["fit"] for m in mc["models"] if m["model_name"].startswith("C"))
+    png = report.forest_png(cmod, title="Model C")
+    png_content = report.forest_png(cmod, exclude_groups=("authority", "page_type", "intent"))
+    assert png and png[:8] == b"\x89PNG\r\n\x1a\n"          # valid PNG
+    assert png_content and len(png_content) < len(png)       # content-only is a smaller plot
+    assert report.forest_png({"coefficients": []}) is None   # nothing to plot -> None
+
+
+# 20. BH is applied within EACH model specification (q >= p inside each spec)
+def test_bh_within_each_model_spec():
+    mc = E.model_comparison(_source_df(seed=4), context="chatgpt")
+    fitted = [m for m in mc["models"] if m["fit"].get("fitted")]
+    assert fitted
+    for m in fitted:
+        focal = [c for c in m["fit"]["coefficients"]
+                 if c["is_focal"] and c["p"] is not None and c["p_adj"] is not None]
+        assert focal and all(c["p_adj"] >= c["p"] - 1e-9 for c in focal)
+
+
+# 21. heavily-overlapping similarity features trigger a high-VIF warning/flag
+def test_similarity_high_vif_warning():
+    mc = E.model_comparison(_source_df(seed=5), context="chatgpt")
+    severe = [r for r in mc["vif_rows"] if r["feature_group"] == "relevance" and r["vif_level"] == "severe"]
+    assert len(severe) >= 2
+    assert any(a["check"] == "similarity_collinear" for a in mc["anomaly_rows"])
+    assert any("severe vif" in w.lower() or "relevance" in w.lower() for w in mc["warnings"])
+
+
+# 22. the sensitivity report avoids causal/over-claiming wording, keeps observational framing
+def test_sensitivity_report_safe_wording():
+    mc = E.model_comparison(_source_df(seed=6), context="chatgpt")
+    lines = []
+    report._sensitivity_section(mc, lines.append)
+    md = "\n".join(lines).lower()
+    assert "observational association analysis" in md
+    assert "does not prove" in md                              # the safe negation is present
+    for banned in ("ai rejected", "ai ignored", "ai reject", "causes citation", "caused by"):
+        assert banned not in md
+
+
+# 23. existing ChatGPT pipeline still produces a (graceful) regression_comparison
+def test_pipeline_carries_regression_comparison():
+    d = demo.make_demo_brand_run()
+    feats = cgp.build_features(d["run"], d["pages"], SimilarityEngine("lexical"))["features"]
+    assert "has_faq" in feats[0] and "page_type" in feats[0]   # content features now on every source
+    an = cgp.analyze(feats)
+    assert "regression_comparison" in an and an["regression_comparison"]["available"] is True
+    json.dumps(an["regression_comparison"])                    # JSON-serializable

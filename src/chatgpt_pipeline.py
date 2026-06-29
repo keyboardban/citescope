@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from . import analysis, pipeline
+from . import analysis, brand_visibility as _bv, econometrics, pipeline
 from .config import MAX_SIM_CHARS
 from .chunking import chunk_text, extract_headings
 from .features import _freshness_days, _parse_date
@@ -156,6 +156,13 @@ def build_features(run: dict, pages: dict[str, dict], sim_engine: SimilarityEngi
                 row["max_chunk_prompt_similarity"] = summarize_scores(p_scores)["max"]
                 row["max_chunk_answer_similarity"] = summarize_scores(a_scores)["max"]
 
+        # Heuristic content features + page_type for EVERY source (needs a scraped page;
+        # None otherwise) — makes the content/page-type regression models possible.
+        content = (_bv.extract_content_features(page, prompt, s.get("intent") or "", stype, sim_engine)
+                   if scraped else _bv._empty_content())
+        row.update({k: content.get(k) for k in _bv.CONTENT_BOOL_FEATURES + _bv.CONTENT_NUM_FEATURES})
+        row["page_type"] = content.get("page_type")
+
         features.append(row)
 
     return {"features": features, "chunks": chunks_map}
@@ -197,6 +204,8 @@ def analyze(features: list[dict]) -> dict:
             df, CHATGPT_NUMERIC, CHATGPT_LABELS, CHATGPT_PHASE,
             position_col="source_position", position_fallbacks=["observed_rank"],
             cluster_key="record_id", context="chatgpt"),
+        "regression_comparison": econometrics.model_comparison(
+            df, context="chatgpt", labels=CHATGPT_LABELS, phase_map=CHATGPT_PHASE),
         "length_sim_corr": analysis.length_sim_correlation(df, "page_answer_similarity"),
         "top_domains_cited": _top_domains(df, 1),
         "top_domains_more": _top_domains(df, 0),

@@ -140,6 +140,67 @@ def regression_block(fits, focal_only: bool = True) -> None:
                     {"feature": r["label"], "AME": r["ame"], "se": r["se"],
                      "ci_low": r["ci_low"], "ci_high": r["ci_high"], "p": r["p"]} for r in f["ame"]]),
                     width="stretch", hide_index=True)
+
+
+def sensitivity_block(mc) -> None:
+    """Render the A/B/C/D model comparison + VIF/anomaly/group diagnostics + forest plots."""
+    import pandas as pd
+
+    from src import report
+
+    if not mc or not mc.get("available"):
+        st.info("Sensitivity analysis needs `statsmodels`.")
+        return
+    if not mc.get("fitted"):
+        st.info("Not enough usable rows to fit the model comparison — scrape pages and apply a manifest, "
+                "and ensure enough sources. (The CSV exports still generate.)")
+        return
+
+    st.warning(config.CAVEAT_MODEL_OBSERVATIONAL, icon="📐")
+    for s in mc.get("executive_summary") or []:
+        st.markdown(f"- {s}")
+    with st.expander("⚠️ Interpretation caveats"):
+        for cv in (config.CAVEAT_POSITION_DOWNSTREAM, config.CAVEAT_SIMILARITY_FEATURES,
+                   config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS):
+            st.markdown(f"- {cv}")
+
+    comp = pd.DataFrame(mc.get("comparison_rows") or [])
+    if not comp.empty:
+        st.markdown(f"**Model comparison — Δ probability across A→D** "
+                    f"(clustered by `{mc.get('cluster_variable')}`, {mc.get('cluster_count')} clusters)")
+        piv = comp.pivot_table(index="feature", columns="model_name", values="delta_prob", aggfunc="first").round(4)
+        st.dataframe(piv, width="stretch")
+        st.caption("A coefficient stable across A→D is more trustworthy; large swings indicate confounding or "
+                   "collinearity. A = content · B = +source/authority · C = +position · D = reduced similarity.")
+
+    cmod = next((m["fit"] for m in mc.get("models", []) if m["model_name"].startswith("C") and m["fit"].get("fitted")),
+                mc.get("diagnostic_model") or {})
+    p1 = report.forest_png(cmod, title="Position-adjusted (Model C)")
+    p2 = report.forest_png(cmod, exclude_groups=("authority", "page_type", "intent"), title="Content features only")
+    if p1 or p2:
+        fc = st.columns(2)
+        if p1:
+            fc[0].image(p1, caption="Focal features (Δ probability ± 95% CI)")
+        if p2:
+            fc[1].image(p2, caption="Content features only (excl. source position)")
+
+    vif = pd.DataFrame(mc.get("vif_rows") or [])
+    if not vif.empty:
+        with st.expander("VIF diagnostics (multicollinearity)"):
+            st.dataframe(vif[["feature", "vif", "vif_level", "interpretation"]], width="stretch", hide_index=True)
+
+    st.markdown("**Anomaly diagnostics**")
+    anom = pd.DataFrame(mc.get("anomaly_rows") or [])
+    if anom.empty:
+        st.caption("No anomalies flagged.")
+    else:
+        st.dataframe(anom[["check", "feature", "estimate", "p", "severity", "message"]],
+                     width="stretch", hide_index=True)
+
+    grp = pd.DataFrame(mc.get("group_rows") or [])
+    if not grp.empty:
+        with st.expander("Feature group summary"):
+            st.dataframe(grp, width="stretch", hide_index=True)
         if f.get("ovb_caveat"):
             caveat_box("**Omitted-variable note (signed).** " + f["ovb_caveat"])
         for w in f.get("warnings", []):

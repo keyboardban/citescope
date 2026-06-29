@@ -9,6 +9,7 @@ numpy>=1.26
 scipy>=1.11               # statsmodels dependency (regression inference)
 statsmodels>=0.14         # LPM/logit, robust + cluster-robust SEs, AME, VIF, BH (citation model)
 plotly>=5.20              # all dashboard visualizations
+matplotlib>=3.8           # static forest-plot PNG export (guarded; optional)
 tldextract>=5.1           # registrable-domain extraction (public-suffix aware)
 python-dotenv>=1.0        # load API keys from .env
 requests>=2.31            # redirect resolution for grounding URLs

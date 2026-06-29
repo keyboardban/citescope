@@ -218,6 +218,130 @@ def _regression_section(fits, a, *, header: str = "Position-adjusted citation mo
 
 
 # --------------------------------------------------------------------------- #
+# Sensitivity analysis (A/B/C/D model comparison) + diagnostics
+# --------------------------------------------------------------------------- #
+def econometrics_model_comparison_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("comparison_rows"), "no model comparison\n")
+
+
+def econometrics_vif_diagnostics_csv(mc: dict) -> str:
+    rows = (mc or {}).get("vif_rows")
+    cols = ["feature", "vif", "vif_level", "interpretation"]
+    return pd.DataFrame(rows)[cols].to_csv(index=False) if rows else "no VIF diagnostics\n"
+
+
+def econometrics_anomaly_diagnostics_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("anomaly_rows"), "no anomalies flagged\n")
+
+
+def econometrics_feature_group_summary_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("group_rows"), "no feature-group summary\n")
+
+
+def forest_png(fit: dict, *, exclude_groups=(), title: str | None = None, focal_only: bool = True) -> bytes | None:
+    """Static matplotlib forest plot (Δ probability ± 95% CI) as PNG bytes. Returns None
+    if matplotlib is unavailable or there are no plottable coefficients."""
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:  # noqa: BLE001
+        return None
+    from . import econometrics as _E
+
+    coefs = [c for c in (fit or {}).get("coefficients", [])
+             if c.get("estimate") is not None and c.get("ci_low") is not None and c.get("ci_high") is not None]
+    if focal_only:
+        coefs = [c for c in coefs if c.get("is_focal")] or coefs
+    if exclude_groups:
+        coefs = [c for c in coefs if _E._feature_group(c["name"]) not in exclude_groups]
+    if not coefs:
+        return None
+    coefs = sorted(coefs, key=lambda c: c["estimate"])
+    est = [c["estimate"] for c in coefs]
+    lo = [c["estimate"] - c["ci_low"] for c in coefs]
+    hi = [c["ci_high"] - c["estimate"] for c in coefs]
+
+    def _crosses(c):
+        return not ((c["ci_low"] > 0 and c["ci_high"] > 0) or (c["ci_low"] < 0 and c["ci_high"] < 0))
+
+    colors = ["#94a3b8" if _crosses(c) else ("#16a34a" if c["estimate"] > 0 else "#ef4444") for c in coefs]
+    y = list(range(len(coefs)))
+    fig, ax = plt.subplots(figsize=(8.2, max(2.6, 0.42 * len(coefs) + 1.0)))
+    ax.errorbar(est, y, xerr=[lo, hi], fmt="none", ecolor="#9aa3b2", elinewidth=1.5, capsize=3, zorder=1)
+    ax.scatter(est, y, c=colors, s=46, zorder=2, edgecolors="white", linewidths=0.6)
+    ax.axvline(0, color="#6b7280", lw=1, ls="--")
+    ax.set_yticks(y)
+    ax.set_yticklabels([c["label"] for c in coefs], fontsize=9)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:+.0f}pp"))
+    ax.set_xlabel("Δ probability of citation (percentage points), 95% CI")
+    nc = fit.get("n_clusters")
+    sub = f"{fit.get('se_type', '')} SE · n={fit.get('n', '?')}" + (f" · {nc} clusters" if nc else "")
+    ax.set_title((title or fit.get("title") or "Position-adjusted citation model") + f"\n{sub}",
+                 fontsize=11, loc="left")
+    ax.grid(axis="x", color="#eef0f6")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _sensitivity_section(mc: dict, a) -> None:
+    """Render the model-comparison sensitivity analysis + VIF/anomaly/group diagnostics."""
+    if not mc or not mc.get("available"):
+        return
+    a("## Citation model — sensitivity & diagnostics\n")
+    a(f"> {config.CAVEAT_MODEL_OBSERVATIONAL}\n")
+    if not mc.get("fitted"):
+        a("_Not enough usable rows to fit the model comparison (needs a scraped, manifest-matched run "
+          "with enough sources). The CSV exports are still generated (possibly empty)._\n")
+        return
+
+    es = mc.get("executive_summary") or []
+    if es:
+        a("### Executive summary\n")
+        for s in es:
+            a(f"- {s}")
+        a("")
+
+    a("### Interpretation caveats\n")
+    for cv in (config.CAVEAT_POSITION_DOWNSTREAM, config.CAVEAT_SIMILARITY_FEATURES,
+               config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS):
+        a(f"- {cv}")
+    a("")
+
+    comp = pd.DataFrame(mc.get("comparison_rows") or [])
+    if not comp.empty:
+        a("### Model comparison — Δ probability across specifications\n")
+        a("_A · content only → B · +source/authority → C · +position → D · reduced similarity. "
+          "A coefficient stable across A→D is more trustworthy; large swings indicate confounding or "
+          "collinearity. Full per-model SE/CI/p/q(BH)/VIF in `econometrics_model_comparison.csv`._\n")
+        piv = comp.pivot_table(index="feature", columns="model_name", values="delta_prob", aggfunc="first")
+        a(_md_table(piv.reset_index().round(4)))
+        a(f"_Clustered by **{mc.get('cluster_variable')}** ({mc.get('cluster_count')} clusters)._\n")
+
+    vif = pd.DataFrame(mc.get("vif_rows") or [])
+    if not vif.empty:
+        a("### VIF diagnostics (multicollinearity)\n")
+        a(_md_table(vif[["feature", "vif", "vif_level", "interpretation"]]))
+
+    a("### Anomaly diagnostics\n")
+    anom = pd.DataFrame(mc.get("anomaly_rows") or [])
+    if anom.empty:
+        a("_No anomalies flagged._\n")
+    else:
+        a(_md_table(anom[["check", "feature", "estimate", "p", "severity", "message"]]))
+
+    grp = pd.DataFrame(mc.get("group_rows") or [])
+    if not grp.empty:
+        a("### Feature group summary\n")
+        a(_md_table(grp[["feature_group", "num_features", "top_positive_features", "top_negative_features",
+                         "num_significant_p_05", "num_significant_q_10", "interpretation"]]))
+
+
+# --------------------------------------------------------------------------- #
 # single-run report
 # --------------------------------------------------------------------------- #
 def markdown_report(run: dict) -> str:
@@ -610,6 +734,11 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
         bundle["intent_summary"] = cgp.intent_summary(features)
         if (run.get("manifest") or {}).get("has_expected"):
             bundle["expected_vs_actual"] = cgp.expected_vs_actual(features)
+    mc = (an or {}).get("regression_comparison")
+    if mc and mc.get("available"):
+        bundle["regression_comparison"] = {k: mc.get(k) for k in (
+            "fitted", "cluster_variable", "cluster_count", "comparison_rows", "vif_rows",
+            "anomaly_rows", "group_rows", "executive_summary", "warnings")}
     if brand and brand.get("has_terms"):
         bundle["brand_visibility"] = {
             "summary": brand.get("summary"),
@@ -666,6 +795,7 @@ def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = N
         a(_md_table(gc[gc["phase"] == "post_output"][cols]))
 
     _regression_section((an or {}).get("regression"), a)
+    _sensitivity_section((an or {}).get("regression_comparison"), a)
 
     corr = pd.DataFrame(an.get("correlation") or [])
     if not corr.empty:
