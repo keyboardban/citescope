@@ -193,6 +193,10 @@ def analyze(features: list[dict]) -> dict:
         "source_breakdown": analysis.source_breakdown(df).to_dict(orient="records"),
         "official": analysis.official_compare(df),
         "correlation": analysis.correlation_with_citation(df, CHATGPT_NUMERIC, CHATGPT_LABELS, CHATGPT_PHASE).to_dict(orient="records"),
+        "regression": analysis.econometric_analysis(
+            df, CHATGPT_NUMERIC, CHATGPT_LABELS, CHATGPT_PHASE,
+            position_col="source_position", position_fallbacks=["observed_rank"],
+            cluster_key="record_id", context="chatgpt"),
         "length_sim_corr": analysis.length_sim_correlation(df, "page_answer_similarity"),
         "top_domains_cited": _top_domains(df, 1),
         "top_domains_more": _top_domains(df, 0),

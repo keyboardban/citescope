@@ -166,6 +166,58 @@ def _analysis_guide(kind: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# position-adjusted citation model (regression) rendering
+# --------------------------------------------------------------------------- #
+def _regression_table(fit: dict) -> pd.DataFrame:
+    rows = []
+    for c in fit.get("coefficients", []):
+        rows.append({
+            "feature": c["label"], "Δ prob": c["estimate"], "se": c["se"],
+            "ci_low": c["ci_low"], "ci_high": c["ci_high"], "p": c["p"],
+            "p_adj(BH)": c.get("p_adj"), "VIF": c.get("vif"),
+            "focal": "✓" if c.get("is_focal") else "",
+        })
+    return pd.DataFrame(rows)
+
+
+def _regression_section(fits, a, *, header: str = "Position-adjusted citation model") -> None:
+    """Render a list of fit_results (or {group: fit} dict) into the markdown report."""
+    if isinstance(fits, dict):
+        fits = list(fits.values())
+    fits = [f for f in (fits or []) if f]
+    if not fits:
+        return
+    a(f"## {header} (LPM — cautious effect estimates)\n")
+    a(f"> {config.CAVEAT_REGRESSION}\n")
+    for f in fits:
+        if not f.get("available", True):
+            a(f"_{(f.get('warnings') or ['statsmodels not installed'])[0]}_\n")
+            continue
+        if not f.get("fitted"):
+            a(f"_{f.get('title', 'model')}: {(f.get('warnings') or ['not fitted'])[0]}_\n")
+            continue
+        meta = f"n={f['n']}"
+        meta += (f", {f['n_clusters']} clusters ({f['se_type']} SE)"
+                 if f.get("n_clusters") else f", {f['se_type']} SE")
+        if f.get("r2") is not None:
+            meta += f", R²={f['r2']}"
+        a(f"**{f.get('title', 'model')}** — {meta}. Coefficients are Δ probability of citation per feature, "
+          "holding the others (incl. position) fixed.\n")
+        a(_md_table(_regression_table(f)))
+        if f.get("ame"):
+            a("_Logit AME cross-check (Δ probability; should track the LPM coefficients above):_\n")
+            a(_md_table(pd.DataFrame([
+                {"feature": r["label"], "AME": r["ame"], "se": r["se"],
+                 "ci_low": r["ci_low"], "ci_high": r["ci_high"], "p": r["p"]} for r in f["ame"]])))
+        if f.get("ovb_caveat"):
+            a(f"> **Omitted-variable note (signed).** {f['ovb_caveat']}\n")
+        for asm in f.get("assumptions", []):
+            a(f"> {asm}\n")
+        for w in f.get("warnings", []):
+            a(f"> ⚠️ {w}\n")
+
+
+# --------------------------------------------------------------------------- #
 # single-run report
 # --------------------------------------------------------------------------- #
 def markdown_report(run: dict) -> str:
@@ -240,10 +292,13 @@ def markdown_report(run: dict) -> str:
             a(f"- {u}")
         a("")
 
+    _regression_section((run.get("analysis") or {}).get("regression"), a)
+
     corr = correlation_with_citation(df)
     if not corr.empty:
-        a("## Feature ↔ citation correlation (point-biserial)\n")
-        a("_Correlation of each numeric feature with the cited label (−1..+1); small |r| with few rows is noisy._\n")
+        a("## Feature ↔ citation correlation (point-biserial, unadjusted)\n")
+        a("_Quick **unadjusted** screen (no controls, no error bar). The position-adjusted model above "
+          "is the rigorous read; small |r| with few rows is noisy._\n")
         a(_md_table(corr[["feature", "phase", "corr"]]))
 
     a("## Feature dictionary\n")
@@ -342,6 +397,9 @@ def batch_markdown_report(batch: dict) -> str:
         keep = ["feature", "phase", "cited_median", "noncited_median", "median_diff",
                 "mwu_p", "ci_low", "ci_high", "n_cited", "n_noncited"]
         a(_md_table(gs[[c for c in keep if c in gs.columns]]))
+
+    _regression_section(agg.get("regression"), a, header="Position-adjusted citation model (pooled)")
+
     sb = pd.DataFrame(agg.get("source_breakdown") or [])
     if not sb.empty:
         a("## Source-type breakdown (pooled)\n")
@@ -525,6 +583,8 @@ def brand_visibility_markdown(brand: dict) -> str:
         a(_md_table(pb[pb["brand_match_group"] == "all"][keep]))
         a("_Cited vs more-only compared **within** similar source-position bands, so differences are not "
           "merely position effects. `source_position` is panel order, not Google rank._\n")
+
+    _regression_section(brand.get("position_adjusted"), a, header="Position-adjusted content model")
     return "\n".join(lines)
 
 
@@ -536,6 +596,7 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
         "manifest": run.get("manifest"), "summary": (an or {}).get("summary"),
         "group_compare": (an or {}).get("group_compare"),
         "correlation": (an or {}).get("correlation"),
+        "regression": (an or {}).get("regression"),
         "source_breakdown": (an or {}).get("source_breakdown"),
         "official": (an or {}).get("official"),
         "top_domains_cited": (an or {}).get("top_domains_cited"),
@@ -557,6 +618,7 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
             "examples": brand.get("examples"),
             "cited_vs_moreonly_content_features": brand.get("cited_vs_moreonly"),
             "content_features_by_position_band": brand.get("by_position_band"),
+            "position_adjusted_regression": brand.get("position_adjusted"),
             "source_pages": brand.get("source_pages"),
             "records": brand.get("records"),
             "client_terms": brand.get("client_terms"),
@@ -603,10 +665,13 @@ def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = N
         a(f"> {config.CAVEAT_ANSWER_CG}\n")
         a(_md_table(gc[gc["phase"] == "post_output"][cols]))
 
+    _regression_section((an or {}).get("regression"), a)
+
     corr = pd.DataFrame(an.get("correlation") or [])
     if not corr.empty:
-        a("## Feature ↔ citation correlation (point-biserial)\n")
-        a("_corr of each numeric feature with `cited` (−1..+1); small |r| with few rows is noisy._\n")
+        a("## Feature ↔ citation correlation (point-biserial, unadjusted)\n")
+        a("_Quick **unadjusted** screen (no controls, no error bar) — the position-adjusted model above is "
+          "the rigorous read; small |r| with few rows is noisy._\n")
         a(_md_table(corr[["feature", "phase", "corr"]]))
 
     sb = pd.DataFrame(an.get("source_breakdown") or [])

@@ -466,6 +466,49 @@ def brand_feature_compare(cited_vs: list[dict], group: str = "all", top: int = 1
     return _style(fig, max(360, 60 + 24 * len(rows)))
 
 
+# --------------------------------------------------------------------------- #
+# position-adjusted citation model — coefficient forest plot
+# --------------------------------------------------------------------------- #
+def coefficient_forest(fit: dict, focal_only: bool = True, max_features: int = 18) -> go.Figure:
+    """Dot-and-whisker of LPM coefficients (Δ probability of citation, 95% CI).
+    Green/red = CI excludes zero (+/−); grey = not distinguishable from zero."""
+    coefs = [c for c in (fit or {}).get("coefficients", [])
+             if c.get("estimate") is not None and c.get("ci_low") is not None and c.get("ci_high") is not None]
+    if focal_only:
+        coefs = [c for c in coefs if c.get("is_focal")] or coefs
+    if not coefs:
+        return _style(go.Figure(), 300)
+    coefs = sorted(coefs, key=lambda c: abs(c["estimate"]))[-max_features:]
+
+    def _sig(c):
+        return (c["ci_low"] > 0 and c["ci_high"] > 0) or (c["ci_low"] < 0 and c["ci_high"] < 0)
+
+    colors = [(COLORS["cited"] if c["estimate"] > 0 else COLORS["danger"]) if _sig(c)
+              else COLORS["noncited"] for c in coefs]
+    hover = [
+        f"{c['label']}<br>Δprob {c['estimate']:+.3f} [{c['ci_low']:+.3f}, {c['ci_high']:+.3f}]"
+        f"<br>p={c['p']}" + (f" · q(BH)={c['p_adj']}" if c.get("p_adj") is not None else "")
+        + (f"<br>VIF {c['vif']:.1f}" if c.get("vif") else "")
+        for c in coefs
+    ]
+    fig = go.Figure(go.Scatter(
+        x=[c["estimate"] for c in coefs], y=[c["label"] for c in coefs], mode="markers",
+        marker=dict(size=11, color=colors, line=dict(width=0)),
+        error_x=dict(type="data", symmetric=False,
+                     array=[c["ci_high"] - c["estimate"] for c in coefs],
+                     arrayminus=[c["estimate"] - c["ci_low"] for c in coefs],
+                     color="#94a3b8", thickness=1.5, width=4),
+        hovertext=hover, hoverinfo="text"))
+    fig.add_vline(x=0, line_width=1, line_dash="dash", line_color=COLORS["muted"])
+    nc = fit.get("n_clusters")
+    sub = f"LPM · {fit.get('se_type', '')} SE · n={fit.get('n', '?')}" + (f" · {nc} clusters" if nc else "")
+    fig.update_layout(title=f"{fit.get('title') or 'Position-adjusted citation model'}<br>"
+                            f"<sub>{sub} · Δ probability of citation, 95% CI</sub>")
+    fig.update_xaxes(title="Δ probability of citation (cited vs not)")
+    fig.update_yaxes(title="")
+    return _style(fig, max(320, 70 + 26 * len(coefs)), legend=False)
+
+
 def official_bar(off: dict) -> go.Figure:
     """Cite-rate for institutional-official vs brand-candidate vs other."""
     if not off:

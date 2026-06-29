@@ -240,11 +240,20 @@ _TOPIC_DOMAINS = {
 }
 
 
+def _salt(rank, ti, pi, s):
+    """Deterministic, quasi-independent perturbation in [0, 0.1) (keeps the demo
+    reproducible while preventing the similarity features from being degenerate
+    affine copies of one variable — which would make a regression un-identified)."""
+    return ((rank * 7 + ti * 13 + pi * 17 + s * 31) % 11) / 110.0
+
+
 def _demo_row(rid, topic, item, rank, dom, stype, inst, brand, cited, ti, pi):
     jit = rank * 0.001 + ti * 0.002 + pi * 0.0015
     pq = round(0.16 + (0.22 if cited else 0.0) + max(0, (6 - rank)) * 0.012 + jit, 3)
     po = round(0.15 + (0.30 if cited else 0.0) + 0.003 * rank + jit, 3)
     wc = 500 + rank * 40 + (250 if cited else 0) + pi * 20
+    # Each similarity shares the cited/rank signal but carries its own independent
+    # component, so they are correlated (realistic) without being collinear.
     return {
         "candidate_id": short_id(f"{rid}:{dom}:{rank}"),
         "url": f"https://{dom}/p{rank}", "domain": dom, "root_domain": dom, "title": dom,
@@ -253,9 +262,11 @@ def _demo_row(rid, topic, item, rank, dom, stype, inst, brand, cited, ti, pi):
         "serp_rank": rank, "source_type": stype,
         "institutional_official": inst, "official_source": inst, "brand_official_candidate": brand,
         "scrape_success": True,
-        "title_query_sim": round(pq * 0.9 + 0.03, 3), "snippet_query_sim": round(pq * 0.8, 3),
-        "page_query_sim": pq, "max_chunk_query_sim": round(pq + 0.05, 3),
-        "page_output_sim": po, "max_chunk_output_sim": round(po + 0.03, 3),
+        "title_query_sim": round(0.55 * pq + 0.10 + (0.10 if cited else 0.0) + _salt(rank, ti, pi, 1), 3),
+        "snippet_query_sim": round(0.50 * pq + 0.09 + _salt(rank, ti, pi, 2), 3),
+        "page_query_sim": round(pq + _salt(rank, ti, pi, 3) * 0.5, 3),
+        "max_chunk_query_sim": round(0.7 * pq + 0.06 + _salt(rank, ti, pi, 4), 3),
+        "page_output_sim": po, "max_chunk_output_sim": round(0.8 * po + 0.05 + _salt(rank, ti, pi, 5), 3),
         "word_count": wc, "char_count": wc * 6, "original_char_count": wc * 6,
         "used_char_count": min(wc * 6, 8000), "truncated": wc * 6 > 8000,
         "heading_count": 3 + (rank % 4), "freshness_days": float(20 + rank * 18 + pi * 5 - cited * 8),

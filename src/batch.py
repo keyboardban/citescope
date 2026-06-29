@@ -24,6 +24,7 @@ from .analysis import (
     FEATURE_PHASE,
     _normalize_recall,
     correlation_with_citation,
+    econometric_analysis,
     features_df,
     official_compare,
     source_breakdown,
@@ -197,6 +198,11 @@ def aggregate(runs: list[dict], combined: list[dict]) -> dict:
         "recall": _recall_avg(runs),
         "source_breakdown": source_breakdown(df).to_dict(orient="records"),
         "correlation": correlation_with_citation(df).to_dict(orient="records"),
+        # pooled across prompts → cluster by run_id (many runs ⇒ valid cluster-robust SEs)
+        "regression": econometric_analysis(
+            df, NUMERIC_FEATURES, FEATURE_LABELS, FEATURE_PHASE,
+            position_col="serp_rank", cluster_key="run_id", context="gemini",
+            title="Position-adjusted citation model (pooled across prompts)"),
         "official": official_compare(df),
     }
 

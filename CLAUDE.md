@@ -1,6 +1,6 @@
 # CLAUDE.md — CiteScope session recap & guide
 
-> Auto-loaded each session. Read this first to recap where we are. _Last updated: 2026-06-26._
+> Auto-loaded each session. Read this first to recap where we are. _Last updated: 2026-06-29._
 
 ## What this project is
 **CiteScope** = an AI-search **citation audit** (black-box, observational). Streamlit app.
@@ -23,7 +23,7 @@ Similarity = a *semantic overlap proxy*, not proof of use.
 ```bash
 source .venv/bin/activate
 streamlit run app.py                 # launch UI (no keys? click "Load demo run" / "Load sample")
-pytest -q                            # 48 tests
+pytest -q                            # 65 tests
 python -m compileall -q src ui app.py tests
 ```
 Keys live in `.env`: `GEMINI_API_KEY` (Gemini mode + embeddings), `APIFY_TOKEN` (scraping in BOTH modes).
@@ -38,6 +38,7 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 - **ChatGPT mode:** `brightdata.py` (parser + **Prompt Manifest** match, incl. brand-term fields), `chatgpt_pipeline.py` (features + **intent→source-type** analysis), `ui/views/chatgpt.py` (Upload/Records/Sources/Scrape/Feature/Questions/**Intent**/**Brand Visibility**/Content/Report).
 - **Per-question / clustering:** `cluster.py` (question×domain matrix + Jaccard agglomerative clustering) → ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters".
 - **Non-branded Brand Visibility:** `src/brand_visibility.py` (engine: term detection + record/intent/source/content/position tables) → ChatGPT "🏷️ Brand Visibility" tab + `report.py` brand exports/section + `demo.make_demo_brand_run()`.
+- **Econometrics (citation model):** `src/econometrics.py` (statsmodels, guarded) — position-adjusted **LPM** (`cited`∼features) with **HC3 / cluster-robust** SEs, **wild cluster bootstrap** (<40 clusters), **VIF**, **Benjamini–Hochberg**, **logit+AME** cross-check. Wired via `analysis.econometric_analysis` into `stage_analyze` / `chatgpt_pipeline.analyze` (cluster `record_id`) / `batch.aggregate` (cluster `run_id`) / `brand_visibility.position_adjusted_regression`; rendered by `charts.coefficient_forest` + `components.regression_block` ("Position-adjusted citation model" sections) + report/JSON. **Cautious effect estimates under stated assumptions + a signed OVB caveat — a scoped exception to the observational rule.** Deps: `statsmodels`/`scipy` (wheel-verified on 3.14).
 - Docs: `docs/DEVELOPMENT.md` (full architecture + change log A–I), `docs/ARCHITECTURE_BEFORE_AFTER.md`, `docs/24_06_2026.docx`.
 - Data (gitignored): `data/{runs,chatgpt,batches,raw,exports}/`, `data/audit.db`.
 
@@ -52,14 +53,18 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 5. **Per-question separation + question clustering** (`src/cluster.py`) — ChatGPT "🧩 Questions" tab + Topic Studies "Question clusters". (commit `9e31082`)
 6. **Prompt Manifest + Intent → Source Type analysis** (commit `4254949`) — manifest (`prompt_id,topic,intent,prompt[,country,prompt_language,expected_source_types]`) matched to records by prompt text/hash → attaches intent/topic to every record/source/feature. "🎯 Intent" tab: intent×source-type counts+%, cited-by-intent, more-only-by-intent, cited-vs-more comparison, expected-vs-actual.
 7. **Upload limit → 500 MB** (`.streamlit/config.toml` `maxUploadSize/maxMessageSize`; needs server restart) + **AI-ready reports** — both reports now embed a feature dictionary, a feature↔citation correlation table, intent breakdowns (ChatGPT), an "how to analyze (for an AI)" guide, and the **raw per-source/candidate CSV**; ChatGPT adds an **Analysis bundle (JSON)** + per-source dataset CSV downloads. (commit `8ccc94d`)
-8. **Non-branded Brand Visibility Audit** (Iteration I, uncommitted) — new `src/brand_visibility.py` layer + "🏷️ Brand Visibility" tab. Manifest gains `client_brand_terms_to_detect_in_output` / `competitor_terms_to_detect_in_output` / `prompt_is_nonbranded` / `visibility_goal`. For **non-branded** prompts: detects client/competitor in prompt/answer/sources/scraped pages → record table (all prompts kept = denominator), intent rollup (denominator = non-branded prompts; client-vs-competitor cited delta + examples), source/page table (brand-matched only), bilingual heuristic **content features** + `page_type`, **cited-vs-more-only** content comparison, and **position-controlled** (1-3/4-6/7-10/11+) comparison. 6 CSV exports + report section + JSON block; offline brand demo (Thai hospital + auto). _(latest)_
+8. **Non-branded Brand Visibility Audit** (Iteration I, commit `4a667bf` on `main`) — `src/brand_visibility.py` layer + "🏷️ Brand Visibility" tab. Manifest gains `client_brand_terms_to_detect_in_output` / `competitor_terms_to_detect_in_output` / `prompt_is_nonbranded` / `visibility_goal`. For **non-branded** prompts: detects client/competitor in prompt/answer/sources/scraped pages → record table (all prompts kept = denominator), intent rollup (denominator = non-branded prompts; client-vs-competitor cited delta + examples), source/page table (brand-matched only), bilingual heuristic **content features** + `page_type`, **cited-vs-more-only** comparison, and **position-controlled** (1-3/4-6/7-10/11+) comparison. 6 CSV exports + report section + JSON block; offline brand demo (Thai hospital + auto).
+9. **Econometrics layer — position-adjusted citation model** (Iteration J, branch `econometrics-layer`) — `src/econometrics.py` (statsmodels): LPM of `cited` on features adjusting for position, HC3 / cluster-robust SEs (cluster `record_id`/`run_id`), wild cluster bootstrap (<40 clusters), VIF, Benjamini–Hochberg, logit+AME cross-check. Wired into all 3 modes + report + JSON + forest-plot UI. Reports **cautious effect estimates under stated assumptions + signed OVB** (scoped exception to the observational rule); keeps the old correlation table relabeled "unadjusted." Added `statsmodels`/`scipy` deps. _(latest)_
 
 ## Repo state
-Latest committed = `8ccc94d` (AI-ready reports + 500 MB). **Uncommitted this session:** **Non-branded Brand Visibility Audit**
-(NEW `src/brand_visibility.py`; `brightdata.py` brand-term manifest fields; `report.py` 6 brand CSVs + brand section + JSON block;
-`ui/views/chatgpt.py` "🏷️ Brand Visibility" tab + Report wiring; `ui/charts.py` 3 brand charts; `config.py` brand framing/POSITION_BANDS;
-`demo.py` `make_demo_brand_run()`; `tests/test_brand_visibility.py`; `docs/DEVELOPMENT.md` Iteration I).
-**48 pytest tests pass; AppTest renders both modes incl. the Brand Visibility tab.** If you change code: run `pytest -q` + AppTest, then commit/push when the user asks.
+`main` = `4a667bf` (Non-branded Brand Visibility Audit, pushed). **Current branch = `econometrics-layer`** (off `4a667bf`),
+holding the **Econometrics citation-model layer** (NEW `src/econometrics.py`; `analysis.econometric_analysis`; wiring in
+`pipeline`/`chatgpt_pipeline`/`batch`/`brand_visibility`; `report.py` regression section + JSON; `ui/charts.coefficient_forest` +
+`components.regression_block` + view sections; `config.py` econ caveats/thresholds; `requirements.txt` statsmodels+scipy;
+`tests/test_econometrics.py`; demo similarity de-correlated; `docs/DEVELOPMENT.md` Iteration J).
+**65 pytest tests pass; AppTest renders both modes incl. the regression sections.** Untracked reference files
+(textbook PDFs, `docs/demo/` HTML, `scripts/`) deliberately left uncommitted (public repo — copyright/size). If you change
+code: run `pytest -q` + AppTest, then commit/push when the user asks.
 
 ## Key gotchas (these bit us — remember them)
 - **Bright Data INPUT vs OUTPUT files.** The `*_prompts.csv` (cols `url,prompt,country,…`) are *input* prompt lists
@@ -86,4 +91,4 @@ Latest committed = `8ccc94d` (AI-ready reports + 500 MB). **Uncommitted this ses
 ## Likely next steps (ask the user which)
 - Commit + push the ChatGPT mode + doc updates to `citescope`.
 - Deeper cross-topic analysis report (no cost), or **scrape** cited+more-only pages for content/answer-similarity scores (Apify).
-- Optional: logistic-regression "what predicts citation" on pooled data; Gemini-vs-ChatGPT cross-mode comparison; clear stale empty snapshots.
+- ✅ "What predicts citation" regression — done (Iteration J, `econometrics-layer`; merge when ready). Optional next: Gemini-vs-ChatGPT cross-mode comparison; clear stale empty snapshots; run the citation model on the 3 real ChatGPT audits (178–218 sources → enough rows to fit).

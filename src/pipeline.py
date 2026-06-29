@@ -14,7 +14,10 @@ from typing import Callable
 
 from . import apify_runner, gemini_client, storage
 from .analysis import (
+    FEATURE_LABELS,
+    FEATURE_PHASE,
     correlation_with_citation,
+    econometric_analysis,
     features_df,
     group_compare,
     length_sim_correlation,
@@ -28,7 +31,7 @@ from .config import (
     REDIRECT_MAX_WORKERS,
     REDIRECT_TIMEOUT,
 )
-from .features import build_features
+from .features import NUMERIC_FEATURES, build_features
 from .ids import new_run_id, now_iso, stable_hash
 from .matching import match_all, unique_candidates
 from .similarity import SimilarityEngine
@@ -262,6 +265,11 @@ def stage_analyze(run: dict) -> dict:
         "official": official_compare(df),
         "correlation": correlation_with_citation(df).to_dict(orient="records"),
         "length_sim_corr": length_sim_correlation(df),
+        # single-run regression is exploratory (one prompt → no clustering, small n)
+        "regression": econometric_analysis(
+            df, NUMERIC_FEATURES, FEATURE_LABELS, FEATURE_PHASE,
+            position_col="serp_rank", context="gemini",
+            title="Position-adjusted citation model (single run — exploratory)"),
     }
 
 

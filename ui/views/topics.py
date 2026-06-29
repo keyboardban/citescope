@@ -169,6 +169,11 @@ def _show(study: dict) -> None:
         st.plotly_chart(charts.recall_grouped(agg.get("recall") or {}), width="stretch")
         st.caption("Feature↔citation correlations are in the per-topic tables; small samples are noisy.")
 
+    # Position-adjusted citation model (pooled across prompts, clustered by run).
+    C.section("Position-adjusted citation model (pooled)",
+              "Multivariate LPM clustered by prompt — Δ probability of citation per feature, rank held fixed.", "📐")
+    C.regression_block(agg.get("regression"))
+
     # Question clusters across topics.
     feats = study.get("features")
     if feats:

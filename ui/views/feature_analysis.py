@@ -166,8 +166,13 @@ def render() -> None:
         st.caption("`institutional` = .gov/.edu/.mil/.int. `brand candidate` = looks like the entity's "
                    "own site (heuristic, lower confidence).")
 
-    # ---- Correlation + heatmap + flow ----
-    C.section("Feature ↔ citation correlation", "Point-biserial-style; small n is noisy.", "📐")
+    # ---- Position-adjusted citation model (the rigorous headline) ----
+    C.section("Position-adjusted citation model",
+              "Multivariate LPM: Δ probability of citation per feature, holding others (incl. rank) fixed.", "📐")
+    C.regression_block(an.get("regression"))
+
+    # ---- Unadjusted correlation (quick descriptive, kept beneath) ----
+    C.section("Feature ↔ citation correlation (unadjusted)", "Point-biserial-style; no controls; small n is noisy.", "📈")
     corr = correlation_with_citation(df)
     if not corr.empty:
         st.dataframe(corr, width="stretch", hide_index=True)

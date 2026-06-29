@@ -99,6 +99,55 @@ def caveat_box(text: str) -> None:
     st.warning(text, icon="⚠️")
 
 
+def regression_block(fits, focal_only: bool = True) -> None:
+    """Render the position-adjusted citation model: forest plot + coefficient table +
+    diagnostics + the signed omitted-variable caveat + assumptions. Accepts a list of
+    fit_results or a {group: fit} dict (degrades gracefully if absent/unfitted)."""
+    import pandas as pd
+
+    from . import charts
+
+    if isinstance(fits, dict):
+        fits = list(fits.values())
+    fits = [f for f in (fits or []) if f]
+    if not fits:
+        st.info("No position-adjusted model yet (parse a run, and pool prompts / apply a manifest for clustering).")
+        return
+    st.warning(config.CAVEAT_REGRESSION, icon="📐")
+    for f in fits:
+        if not f.get("available", True):
+            st.info((f.get("warnings") or ["Install `statsmodels` to enable the citation model."])[0])
+            continue
+        if not f.get("fitted"):
+            st.caption("ℹ️ " + (f.get("warnings") or ["Not fitted."])[0])
+            continue
+        st.plotly_chart(charts.coefficient_forest(f, focal_only=focal_only), width="stretch")
+        rows = [{"feature": c["label"], "Δ prob": c["estimate"], "se": c["se"],
+                 "ci_low": c["ci_low"], "ci_high": c["ci_high"], "p": c["p"],
+                 "q(BH)": c.get("p_adj"), "VIF": c.get("vif"),
+                 "focal": "✓" if c.get("is_focal") else ""} for c in f.get("coefficients", [])]
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        meta = f"n={f.get('n')}"
+        meta += (f" · {f['n_clusters']} clusters · {f['se_type']} SE"
+                 if f.get("n_clusters") else f" · {f.get('se_type')} SE")
+        if f.get("r2") is not None:
+            meta += f" · R²={f['r2']}"
+        st.caption(meta + " · coefficients are Δ probability of citation, holding other features (incl. position) fixed.")
+        if f.get("ame"):
+            with st.expander("🔁 Logit AME cross-check (Δ probability — should track the LPM coefficients)"):
+                st.dataframe(pd.DataFrame([
+                    {"feature": r["label"], "AME": r["ame"], "se": r["se"],
+                     "ci_low": r["ci_low"], "ci_high": r["ci_high"], "p": r["p"]} for r in f["ame"]]),
+                    width="stretch", hide_index=True)
+        if f.get("ovb_caveat"):
+            caveat_box("**Omitted-variable note (signed).** " + f["ovb_caveat"])
+        for w in f.get("warnings", []):
+            st.caption("⚠️ " + w)
+        for asm in f.get("assumptions", []):
+            st.caption(asm)
+
+
 def empty_state(message: str, icon: str = "🧭") -> None:
     st.markdown(
         f'<div class="cs-card" style="text-align:center;color:{COLORS["muted"]};padding:30px">'

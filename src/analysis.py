@@ -15,7 +15,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from . import econometrics
 from .features import NUMERIC_FEATURES
+
+# Columns never used as focal regressors (redundant / position duplicates).
+_ECON_EXCLUDE_FOCAL = {"char_count", "original_char_count", "used_char_count", "observed_rank"}
 
 FEATURE_LABELS = {
     "serp_rank": "SERP rank (lower = higher)",
@@ -185,6 +189,36 @@ def correlation_with_citation(df: pd.DataFrame, numeric: list[str] | None = None
         r = float(np.corrcoef(x[mask], y[mask])[0, 1])
         rows.append({"feature": labels.get(col, col), "key": col, "phase": ph, "corr": round(r, 3)})
     return pd.DataFrame(rows)
+
+
+def econometric_analysis(df: pd.DataFrame, numeric: list[str], labels: dict, phase: dict,
+                         position_col: str, *, position_fallbacks: list[str] | None = None,
+                         cluster_key: str | None = None, context: str = "",
+                         categoricals=("source_type",),
+                         bool_focal=("institutional_official", "brand_official_candidate"),
+                         focal: list[str] | None = None,
+                         title: str = "Position-adjusted citation model") -> list[dict]:
+    """Position-adjusted LPM of `cited` on the **pre-answer** focal features (the
+    non-circular ones), adjusting for position, clustered when sources nest in prompts.
+    Returns a list (a robustness panel; currently the single headline model)."""
+    if not econometrics.available():
+        return [econometrics.unavailable_result(context)]
+    if df is None or df.empty or "cited" not in df.columns:
+        return []
+    pos_set = {position_col, *(position_fallbacks or [])}
+    if focal is None:
+        focal = [k for k in numeric if k in df.columns
+                 and phase.get(k, "pre_answer") == "pre_answer"
+                 and k not in pos_set and k not in _ECON_EXCLUDE_FOCAL]
+        for b in bool_focal:
+            if b in df.columns and b not in focal:
+                focal.append(b)
+    cats = [c for c in (categoricals or []) if c in df.columns]
+    spec = econometrics.build_spec(
+        focal=focal, position_col=position_col, position_fallbacks=list(position_fallbacks or []),
+        categoricals=cats, cluster_key=cluster_key, phase_map=phase, labels=labels,
+        context=context, phase_filter="pre_answer", title=title)
+    return [econometrics.fit_citation_model(df, spec)]
 
 
 def length_sim_correlation(df: pd.DataFrame, sim_col: str = "page_output_sim") -> dict:

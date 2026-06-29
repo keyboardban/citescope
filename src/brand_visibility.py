@@ -27,6 +27,9 @@ import re
 import unicodedata
 from collections import defaultdict
 
+import pandas as pd
+
+from . import econometrics
 from .chunking import extract_headings
 from .config import (
     DEFAULT_CLIENT_BRAND_TERMS,
@@ -620,6 +623,57 @@ def client_vs_competitor(by_intent: list[dict], summary: dict) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# position-adjusted citation model (the rigorous version of the band comparison)
+# --------------------------------------------------------------------------- #
+_BRAND_REG_FOCAL = CONTENT_BOOL_FEATURES + CONTENT_NUM_FEATURES + [
+    "title_prompt_similarity", "description_prompt_similarity",
+    "page_prompt_similarity", "max_chunk_prompt_similarity",
+    "word_count", "heading_count", "freshness_days",
+]
+_BRAND_REG_LABELS = {
+    "has_faq": "Has FAQ", "has_step_by_step": "Has steps", "has_contact_info": "Has contact info",
+    "has_location_info": "Has location", "has_price_or_package": "Has price/package",
+    "has_opening_hours": "Has hours", "has_booking_or_appointment": "Has booking",
+    "has_phone_number": "Has phone", "has_email": "Has email", "has_author": "Has author",
+    "has_reviewer": "Has reviewer", "has_published_date": "Has published date",
+    "has_updated_date": "Has updated date", "has_schema": "Has schema.org", "has_table": "Has table",
+    "has_bullets": "Has bullets", "has_many_headings": "Has many headings",
+    "heading_prompt_match": "Heading–prompt match", "title_contains_intent_terms": "Title has intent terms",
+    "answer_like_text_in_first_500_chars": "Answer-like intro",
+    "title_prompt_similarity": "Title–prompt sim", "description_prompt_similarity": "Desc–prompt sim",
+    "page_prompt_similarity": "Page–prompt sim", "max_chunk_prompt_similarity": "Best chunk–prompt sim",
+    "word_count": "Word count", "heading_count": "Heading count", "freshness_days": "Age (days)",
+}
+
+
+def position_adjusted_regression(source_pages: list[dict]) -> dict:
+    """LPM of `cited` on content features, **adjusting for source_position** and clustering
+    by prompt — the rigorous companion to the position-band comparison. One fit per brand
+    group (all / client / competitor). Returns {group: fit_result} (empty/sparse-safe)."""
+    if not source_pages:
+        return {}
+    df = pd.DataFrame(source_pages)
+    if "cited" not in df.columns:
+        return {}
+    out: dict = {}
+    slices = [("all", df)]
+    if "is_client_source" in df.columns:
+        slices.append(("client", df[df["is_client_source"] == True]))      # noqa: E712
+        slices.append(("competitor", df[df["is_competitor_source"] == True]))  # noqa: E712
+    for group, sub in slices:
+        if sub is None or sub.empty:
+            continue
+        spec = econometrics.build_spec(
+            focal=[c for c in _BRAND_REG_FOCAL if c in sub.columns],
+            position_col="source_position", position_fallbacks=["observed_rank"],
+            categoricals=[c for c in ("page_type", "source_type") if c in sub.columns],
+            cluster_key="record_id", labels=_BRAND_REG_LABELS, context="brand",
+            title=f"Position-adjusted citation model — {group} brand pages")
+        out[group] = econometrics.fit_citation_model(sub, spec)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # top-level assembler
 # --------------------------------------------------------------------------- #
 def build_brand_visibility(run: dict, features: list[dict] | None = None, pages: dict | None = None,
@@ -648,6 +702,7 @@ def build_brand_visibility(run: dict, features: list[dict] | None = None, pages:
         "source_pages": source_pages,
         "cited_vs_moreonly": compare_cited_more_only(source_pages),
         "by_position_band": position_controlled(source_pages),
+        "position_adjusted": position_adjusted_regression(source_pages),
         "summary": summary,
         "examples": build_examples(records),
         "client_vs_competitor": client_vs_competitor(by_intent, summary),

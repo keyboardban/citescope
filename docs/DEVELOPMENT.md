@@ -351,6 +351,48 @@ non-branded detection, answer/source detection, client-vs-competitor separation,
 source-table filtering, safe wording, zero-match exports, plus Gemini/ChatGPT regression guards); compile
 clean; `AppTest` renders **both** modes incl. the populated Brand Visibility tab.
 
+### Iteration J — Econometrics layer: position-adjusted citation model (branch `econometrics-layer`)
+**What:** A multivariate, error-bar-bearing **citation model** that generalizes the univariate
+`analysis.correlation_with_citation` (point-biserial, no error bar, rows treated independent) and
+`batch._group_stats` into one pre-specified regression of `cited∈{0,1}` on the focal features
+**adjusting for position**, with honest robust/cluster-robust error bars — applied across all three
+contexts (Gemini single+batch, ChatGPT, brand-visibility). Mirrors `docs/econometrics-for-ml-engineers-textbook.md`.
+**Why:** Move from "what correlates with citation" to "what is **associated with** citation once you
+hold position (and the other features) fixed, and is it distinguishable from noise" — the project's
+long-standing "what predicts citation" Future-work item, done with real inference.
+**Framing (scoped exception to the golden rule):** coefficients are reported as **cautious effect
+estimates in probability points**, but only with explicitly stated **assumptions** (exogeneity,
+positivity, functional form) and an **auto-generated signed omitted-variable caveat** (per context).
+The rest of the app stays strictly observational.
+**Change:**
+- **NEW `src/econometrics.py`** (statsmodels behind a graceful import guard): `build_spec` /
+  `design_matrix` (one-hot with reference level + rare-collapse, `log1p`/`bins`/linear position,
+  median-fill + missing indicator, alias/zero-variance drop) → `fit_citation_model`. **LPM** via
+  `sm.OLS` with **HC3** (default) or **cluster-robust** (`cov_type='cluster'` on `record_id`/`run_id`)
+  SEs; **wild cluster bootstrap** for focal coefficients when clusters < 40 (anti-conservative regime);
+  **VIF** multicollinearity flags; **Benjamini–Hochberg** FDR over the focal family; **logit + AME**
+  cross-check (`get_margeff`, probability points) with perfect-separation detection → LPM fallback.
+  Returns one JSON-safe result schema (coefficients, ame, diagnostics, warnings, assumptions, ovb_caveat).
+- **Wired** via `analysis.econometric_analysis` into `pipeline.stage_analyze` (exploratory single run),
+  `chatgpt_pipeline.analyze` (cluster `record_id`), `batch.aggregate` (pooled, cluster `run_id`), and
+  `brand_visibility.position_adjusted_regression` (the rigorous version of the position-band comparison).
+- **Report** (`report.py`): `_regression_section` + AME table in the Gemini / ChatGPT / batch / brand
+  reports + a `regression` block in the JSON bundle. The old correlation table is **kept but relabeled
+  "unadjusted."** **UI:** `charts.coefficient_forest` (dot-and-whisker) + `components.regression_block`
+  (forest + table + AME expander + signed caveat) in Feature Analysis, the ChatGPT analysis + Brand tabs,
+  and Topic Studies. **Config:** `MIN_CLUSTERS`, `VIF_*`, bootstrap/seed, and the regression/assumption/
+  signed-OVB/few-clusters/separation caveat strings. **Deps:** `statsmodels>=0.14` + `scipy>=1.11`
+  (verified to wheel on Python 3.14.2). The demo's similarity features were de-correlated so the showcase
+  regression is identified.
+- **DEFERRED/DROPPED:** fixed-effects/PanelOLS, Double ML, causal forests, IV/DiD/RDD (causal-identification
+  claims and/or data we don't have); interaction-saturated LPM.
+**Verification:** `pytest -q` → **65 passed** (new `tests/test_econometrics.py`: coefficient recovery +
+~95% CI coverage, cluster SE > HC3 under within-cluster correlation, BH ≥ raw-p, VIF flags, log1p vs
+linear functional form, aliased/zero-variance drops, determinism, insufficient-n + statsmodels-absent
+graceful paths, logit-AME ≈ LPM, separation→LPM fallback, wild bootstrap honesty, statsmodels parity,
+bins option, demo integration + signed-OVB framing). Compile clean; `AppTest` renders both modes with the
+regression sections (forest + AME + caveats).
+
 ---
 
 ## 5. Testing & verification (current)

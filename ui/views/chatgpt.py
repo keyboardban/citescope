@@ -285,6 +285,11 @@ def _tab_analysis(ss) -> None:
     C.proxy_note("Cited vs more-only differences are observable associations, not proof of selection. "
                  "Pre-answer signals are the cleaner ones.")
 
+    C.section("Position-adjusted citation model",
+              "Δ probability of being cited per feature, holding others (incl. source position) fixed — "
+              "clustered by prompt. The rigorous read; the correlation below is an unadjusted screen.", "📐")
+    C.regression_block(an.get("regression"))
+
     df = features_df(feats, cgp.CHATGPT_NUMERIC)
     gc = an["group_compare"]
     gdf = pd.DataFrame(gc)
@@ -594,6 +599,13 @@ def _tab_brand(ss) -> None:
             pgrp = st.radio("Brand group ", ["all", "client", "competitor"], horizontal=True, key="cg_brand_pb_group")
             cols = ["position_band", "feature", "cited_mean", "more_only_mean", "delta", "n_cited", "n_more_only"]
             st.dataframe(pb[pb["brand_match_group"] == pgrp][cols], width="stretch", hide_index=True)
+
+    # 7b) position-adjusted regression — the rigorous companion to the band comparison
+    if sp:
+        C.section("Position-adjusted content model (regression)", icon="📐")
+        st.caption("LPM: Δ probability of citation per content feature, holding source position fixed and "
+                   "clustered by prompt. The rigorous version of the position-band comparison above.")
+        C.regression_block(brand.get("position_adjusted"))
 
     # 8) downloads
     C.section("Download brand-visibility exports", icon="⬇️")

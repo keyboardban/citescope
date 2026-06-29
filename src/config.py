@@ -185,6 +185,70 @@ DEFAULT_COMPETITOR_BRAND_TERMS: list[str] = []
 # Source-position bands for the position-controlled content comparison.
 POSITION_BANDS = ("1-3", "4-6", "7-10", "11+", "unknown")
 
+# --------------------------------------------------------------------------- #
+# Econometrics — the position-adjusted "citation model" layer
+# --------------------------------------------------------------------------- #
+# Cluster-robust SEs are only trustworthy with many clusters (textbook rule of
+# thumb); below this, fall back to the wild cluster bootstrap.
+MIN_CLUSTERS = 40
+VIF_WATCH = 5.0          # multicollinearity: watch above this
+VIF_PROBLEM = 10.0       # multicollinearity: problem above this
+ECON_SE_DEFAULT = "HC3"  # heteroskedasticity-robust (0/1 outcome is always heteroskedastic)
+ECON_BOOTSTRAP_ITERS = 1999
+ECON_RNG_SEED = 12345    # match batch.py for determinism
+ECON_MIN_ROWS = 20       # refuse to fit below this many usable rows
+
+# This layer is a SCOPED exception to the app's "observable patterns only" rule:
+# it reports position-adjusted regression coefficients that may be read as cautious
+# EFFECT ESTIMATES, but ONLY under explicitly stated assumptions + a signed
+# omitted-variable caveat. The rest of CiteScope stays strictly observational.
+CAVEAT_REGRESSION = (
+    "**Position-adjusted citation model.** Each coefficient is the association between a "
+    "feature and being cited, **holding the other listed features (including position) fixed** "
+    "(a linear probability model, so coefficients are in **probability points**). It may be read "
+    "as a *cautious effect estimate* — but only under the assumptions below, none of which the "
+    "data can verify. Robust/cluster-robust error bars are honest about noise; they say nothing "
+    "about whether an unobserved confounder is biasing the estimate."
+)
+CAVEAT_ASSUMPTIONS = (
+    "Reading a coefficient as an effect assumes: (1) **exogeneity** — no important unobserved "
+    "confounder correlated with this feature; (2) **positivity/overlap** — both feature-present "
+    "and feature-absent sources exist across the position range; (3) **functional form** — the "
+    "shape (including how position enters) is approximately right. Observational data cannot "
+    "confirm any of these."
+)
+# Signed omitted-variable templates (named confounder + likely direction of bias).
+CAVEAT_OVB_GEMINI = (
+    "Most likely unmeasured confounder: a domain's **authority / popularity prior**, which "
+    "plausibly raises both its reconstructed-SERP rank and its chance of being cited. Rank is "
+    "adjusted for, but residual authority that still drives citation and also tracks a content/"
+    "similarity feature would bias that feature **away from zero** — the true association is "
+    "likely **smaller** than shown. The sign reverses for any feature more common on lower-"
+    "authority pages."
+)
+CAVEAT_OVB_CHATGPT = (
+    "Most likely unmeasured confounder: **brand familiarity / editorial trust** in a source, "
+    "plausibly raising both how prominently it is surfaced (position) and whether it is cited. "
+    "Position is adjusted for, but residual familiarity that also tracks a content feature "
+    "(e.g. structured, contact-rich pages tend to be established brands) biases that feature "
+    "**away from zero** — the true association is likely **smaller**. The sign reverses for a "
+    "feature more common on less-established pages."
+)
+CAVEAT_OVB_BRAND = (
+    "Most likely unmeasured confounder: a brand's **offline reputation / search demand**, which "
+    "can raise both a page's placement and its citation. Position is adjusted for; residual "
+    "reputation that also tracks a content feature biases that feature **away from zero** "
+    "(true association likely **smaller**), and reverses sign for features common on smaller brands."
+)
+CAVEAT_FEW_CLUSTERS = (
+    "Few clusters (prompts): cluster-robust error bars are unreliable below ~40 clusters and run "
+    "too narrow. Treat significance cautiously; the wild cluster bootstrap is the honest fallback."
+)
+CAVEAT_SEPARATION = (
+    "Perfect/quasi-separation: a feature predicted citation flawlessly, so the logit did not "
+    "converge to a finite estimate. Reporting the linear-probability-model estimate instead."
+)
+
 
 # --------------------------------------------------------------------------- #
 # Black-box framing — reused across the UI to keep terminology honest.
