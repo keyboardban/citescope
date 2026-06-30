@@ -171,6 +171,12 @@ def design_matrix(df: pd.DataFrame, spec: dict) -> dict:
             if ones < _MIN_SUPPORT or (len(s.dropna()) - ones) < _MIN_SUPPORT:
                 dropped.append({"name": name, "reason": "low_support"})
                 return
+        miss = s.isna()
+        if miss.any():  # median-fill + missingness indicator (kept as a control nuisance, not focal)
+            s = s.fillna(s.median())
+            if int(miss.sum()) >= _MIN_SUPPORT:
+                cols[f"{name}_missing"] = miss.astype(float)
+                control_cols.append(f"{name}_missing")
         cols[name] = s
         (focal_cols if focal else control_cols).append(name)
 
@@ -481,13 +487,24 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
 
     vif = _vif_map(X)
 
-    # BH over the focal family only (on the final, possibly bootstrapped, p-values)
-    focal_idx = [i for i, nm in enumerate(names) if nm in focal_set]
+    # BH within each focal feature FAMILY (not all focal mixed together) — on the final,
+    # possibly bootstrapped, p-values. A singleton family gets q = p (no correction).
+    from collections import defaultdict as _dd
+    fam_idx: dict[str, list[int]] = _dd(list)
+    for i, nm in enumerate(names):
+        if nm in focal_set:
+            fam_idx[_feature_group(nm)].append(i)
     p_adj_by_name: dict[str, float | None] = {}
-    if focal_idx:
+    bh_families: dict[str, int] = {}
+    for fam, idxs in fam_idx.items():
+        bh_families[fam] = len(idxs)
+        ps = [pvals[i] for i in idxs]
         try:
-            _, q, _, _ = multipletests([pvals[i] for i in focal_idx], alpha=0.05, method="fdr_bh")
-            for j, i in enumerate(focal_idx):
+            if len(idxs) >= 2:
+                _, q, _, _ = multipletests(ps, alpha=0.05, method="fdr_bh")
+            else:
+                q = ps  # single test in this family → no correction
+            for j, i in enumerate(idxs):
                 p_adj_by_name[names[i]] = _f(q[j])
         except Exception:  # noqa: BLE001
             pass
@@ -579,6 +596,7 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
                           if diagnostics.get("position_col") else None),
         "coefficients": coefficients,
         "ame": ame_rows,  # logit AME cross-check (probability points)
+        "bh_families": bh_families,  # {feature_family: n_tests} BH was applied within
         "diagnostics": diagnostics,
         "warnings": warnings,
         "assumptions": [config.CAVEAT_ASSUMPTIONS],
@@ -591,19 +609,23 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # Feature grouping (for grouped interpretation + anomaly checks + forest plots)
 # --------------------------------------------------------------------------- #
+# Feature families (used for grouped interpretation, BH-within-family, anomaly checks,
+# forest plots). `source_type` is split out of `authority`, `structure` is renamed
+# `content_structure`, and `missingness` is handled specially in `_feature_group`.
 FEATURE_GROUPS: dict[str, list[str]] = {
     "position": ["source_position", "observed_rank", "serp_rank"],
     "relevance": ["title_prompt_similarity", "description_prompt_similarity", "page_prompt_similarity",
                   "max_chunk_prompt_similarity", "best_chunk_prompt_similarity", "relevance_score",
                   "title_query_sim", "snippet_query_sim", "page_query_sim", "max_chunk_query_sim",
                   "heading_prompt_match"],
-    "structure": ["has_faq", "has_table", "has_bullets", "heading_count", "has_many_headings", "has_step_by_step"],
+    "content_structure": ["has_faq", "has_table", "has_bullets", "heading_count",
+                          "has_many_headings", "has_step_by_step"],
     "commercial": ["has_price_or_package", "price_package_page", "product_page"],
     "access": ["has_contact_info", "has_location_info", "has_booking_or_appointment",
                "has_phone_number", "has_email", "has_opening_hours"],
-    "authority": ["source_type", "institutional_official", "brand_official_candidate",
-                  "has_author", "has_reviewer", "has_schema", "title_contains_intent_terms",
-                  "answer_like_text_in_first_500_chars"],
+    "authority": ["institutional_official", "brand_official_candidate",
+                  "has_author", "has_reviewer", "has_schema", "title_contains_intent_terms"],
+    "source_type": ["source_type"],
     "freshness": ["age_days", "freshness_days", "has_updated_date", "has_published_date"],
     "page_type": ["page_type"],
     "intent": ["intent"],
@@ -611,15 +633,17 @@ FEATURE_GROUPS: dict[str, list[str]] = {
 _GROUP_OF = {feat: grp for grp, feats in FEATURE_GROUPS.items() for feat in feats}
 
 _GROUP_INTERP = {
-    "position": "Observable placement/ranking (not the AI's internal ranking); may be a mediator — compare models with and without it.",
-    "relevance": "Prompt–text similarity proxies; highly overlapping — prefer one relevance feature or the combined score.",
-    "structure": "Answer-ready structure (FAQ / tables / bullets / headings).",
+    "position": "Observable source panel position (not the AI's internal ranking); may be a mediator — compare models with and without it.",
+    "relevance": "Prompt–text similarity proxies; highly overlapping — prefer one relevance feature or the combined relevance_score.",
+    "content_structure": "Answer-ready structure (FAQ / tables / bullets / headings).",
     "commercial": "Commercial/transactional signals (price / package / product).",
     "access": "Contact / booking / location signals — thin access pages may be surfaced but not cited; read by page_type.",
-    "authority": "Source-type / official / authorship signals (observational proxies for authority).",
+    "authority": "Official / authorship signals (observational proxies for authority).",
+    "source_type": "Source-type dummies (forum / news / official / …); interpret relative to the reference type.",
     "freshness": "Recency/age signals — older may proxy authority or evergreen content, not age itself.",
     "page_type": "Heuristic page-type dummies; interpret relative to the omitted reference category.",
     "intent": "Prompt-intent dummies (from the manifest).",
+    "missingness": "Median-fill missing-value indicators; a non-zero coefficient means missingness itself tracks citation (possibly informative).",
     "other": "Uncategorized features.",
 }
 
@@ -661,6 +685,8 @@ def _base_feature(name: str) -> str:
 
 
 def _feature_group(name: str) -> str:
+    if name.endswith("_missing"):            # median-fill missingness indicators
+        return "missingness"
     return _GROUP_OF.get(_base_feature(name), "other")
 
 
@@ -677,19 +703,35 @@ def vif_level(v) -> tuple[str, str]:
 
 
 # Feature pools for the A/B/C/D model specifications.
+# NOTE: `answer_like_text_in_first_500_chars` is **answer-derived** (circular) and is
+# deliberately excluded from the main model pool — it is a post-output diagnostic only.
 _CONTENT_FEATURES = [
     "has_faq", "has_step_by_step", "has_contact_info", "has_location_info", "has_price_or_package",
     "has_opening_hours", "has_booking_or_appointment", "has_phone_number", "has_email", "has_author",
     "has_reviewer", "has_published_date", "has_updated_date", "has_schema", "has_table", "has_bullets",
     "has_many_headings", "heading_prompt_match", "title_contains_intent_terms",
-    "answer_like_text_in_first_500_chars", "word_count", "heading_count", "freshness_days",
+    "word_count", "heading_count", "freshness_days",
 ]
 _SOURCE_BOOL = ["institutional_official", "brand_official_candidate"]
 _SOURCE_CATS = ["source_type", "page_type", "intent"]
-_SIM_CONTINUOUS = [
+# Prompt-based similarity (admissible in the main model) — kept SEPARATE from answer-derived.
+_SIM_CONTINUOUS = _PROMPT_SIM = [
     "title_prompt_similarity", "description_prompt_similarity", "page_prompt_similarity",
     "max_chunk_prompt_similarity", "best_chunk_prompt_similarity",
     "title_query_sim", "snippet_query_sim", "page_query_sim", "max_chunk_query_sim",
+]
+# Answer-derived / circular similarity — POST-OUTPUT diagnostic ONLY, never in the main model.
+_ANSWER_SIM = [
+    "page_answer_similarity", "max_chunk_answer_similarity", "page_output_sim",
+    "max_chunk_output_sim", "answer_overlap", "answer_like_text_in_first_500_chars",
+]
+# Binary content/source features scanned for separation / rare-prevalence diagnostics.
+_BINARY_DIAG_FEATURES = [
+    "has_faq", "has_step_by_step", "has_contact_info", "has_location_info", "has_price_or_package",
+    "has_opening_hours", "has_booking_or_appointment", "has_phone_number", "has_email", "has_author",
+    "has_reviewer", "has_published_date", "has_updated_date", "has_schema", "has_table", "has_bullets",
+    "has_many_headings", "heading_prompt_match", "title_contains_intent_terms", "product_page",
+    "institutional_official", "brand_official_candidate",
 ]
 
 
@@ -763,13 +805,21 @@ def _group_rows(fit: dict) -> list[dict]:
         est = [c for c in cs if c.get("estimate") is not None]
         pos = sorted((c for c in est if c["estimate"] > 0), key=lambda c: -c["estimate"])[:3]
         neg = sorted((c for c in est if c["estimate"] < 0), key=lambda c: c["estimate"])[:3]
+        sev = [c for c in cs if c.get("vif") is not None and c["vif"] >= config.VIF_PROBLEM]
+        if grp == "relevance" and len(sev) >= 2:
+            warn = "Severe VIF — interpret jointly via relevance_score, not individually."
+        elif sev:
+            warn = f"{len(sev)} feature(s) with severe VIF (≥{config.VIF_PROBLEM:.0f}) — wide error bars, not bias."
+        else:
+            warn = ""
         rows.append({
             "feature_group": grp, "num_features": len(cs),
             "top_positive_features": ", ".join(c["label"] for c in pos),
             "top_negative_features": ", ".join(c["label"] for c in neg),
-            "num_significant_p_05": sum(1 for c in cs if c.get("p") is not None and c["p"] < 0.05),
-            "num_significant_q_10": sum(1 for c in cs if c.get("p_adj") is not None and c["p_adj"] < 0.10),
+            "num_p_lt_05": sum(1 for c in cs if c.get("p") is not None and c["p"] < 0.05),
+            "num_q_lt_10": sum(1 for c in cs if c.get("p_adj") is not None and c["p_adj"] < 0.10),
             "interpretation": _GROUP_INTERP.get(grp, ""),
+            "warnings": warn,
         })
     return rows
 
@@ -783,14 +833,16 @@ def _exec_summary(diag: dict, models: list[dict], cluster_var, cluster_count) ->
     if sig:
         top = max(sig, key=lambda c: abs(c["estimate"]))
         grp = _feature_group(top["name"])
-        out.append(f"Strongest observable predictor: **{top['label']}** ({top['estimate']:+.3f} prob.) "
-                   f"— group *{grp}*" + (" (position is observable placement, not internal AI ranking)."
-                                         if grp == "position" else "."))
-    content = [c for c in sig if _feature_group(c["name"]) in ("structure", "commercial", "access", "page_type")]
+        kind = "observable placement feature" if grp == "position" else "observable association"
+        out.append(f"Strongest {kind}: **{top['label']}** — associated with {top['estimate'] * 100:+.1f} "
+                   f"percentage points citation probability (group *{grp}*, controlling for the included "
+                   f"variables)" + (" — source position is observable placement, not internal AI ranking."
+                                    if grp == "position" else "."))
+    content = [c for c in sig if _feature_group(c["name"]) in ("content_structure", "commercial", "access", "page_type")]
     if content:
-        names = ", ".join(f"{c['label']} ({c['estimate']:+.3f})"
+        names = ", ".join(f"{c['label']} ({c['estimate'] * 100:+.1f} pp)"
                           for c in sorted(content, key=lambda c: -abs(c["estimate"]))[:4])
-        out.append(f"Strongest content / page-type signals: {names}.")
+        out.append(f"Strongest content / page-type signals (associated with citation): {names}.")
     uncertain = [c for c in coefs if c.get("p") is not None and c["p"] >= 0.05
                  and c.get("ci_low") is not None and (c["ci_high"] - c["ci_low"]) > 0.10]
     if uncertain:
@@ -809,10 +861,287 @@ def _exec_summary(diag: dict, models: list[dict], cluster_var, cluster_count) ->
 
 
 # --------------------------------------------------------------------------- #
+# safer cluster-variable selection + extra diagnostics (dedup, scrape, overlap, …)
+# --------------------------------------------------------------------------- #
+_CLUSTER_PREFERENCE = ("domain", "prompt_id", "record_id", "canonical_url", "page_id")
+_OVERLAP_PAIRS = [("has_price_or_package", "page_type"), ("has_faq", "intent"),
+                  ("has_contact_info", "page_type"), ("has_booking_or_appointment", "page_type"),
+                  ("product_page", "source_type")]
+
+
+def choose_cluster(df: pd.DataFrame, candidates=_CLUSTER_PREFERENCE,
+                   min_clusters: int | None = None) -> tuple[str | None, int | None, str]:
+    """Pick a clustering variable **safely**: prefer `domain`, then `prompt_id`, then
+    `record_id`, then a repeated page key (`canonical_url`/`page_id`). Skip a candidate that
+    is degenerate (every row its own cluster — e.g. unique `record_id`, or a `canonical_url`
+    that never repeats) or that has <2 clusters (e.g. a single `run_id`). Returns
+    (cluster_variable, cluster_count, cluster_warning); warns when below `min_clusters`."""
+    min_clusters = config.MIN_CLUSTERS if min_clusters is None else min_clusters
+    n = len(df)
+    for cand in candidates:
+        if cand not in df.columns:
+            continue
+        nun = int(df[cand].astype("string").nunique(dropna=True))
+        if nun < 2:               # only one cluster (e.g. a single run_id) → useless
+            continue
+        if nun >= n:              # degenerate: each row is its own cluster (unique id / non-repeated page)
+            continue
+        warning = config.CAVEAT_CLUSTER_FEW if nun < min_clusters else ""
+        return cand, nun, warning
+    return None, None, ""
+
+
+def _vif_focal_rows(work: pd.DataFrame, focal_features: list[str], labels: dict) -> list[dict]:
+    """VIF computed on a design of ONLY the focal numeric/boolean features (no categorical
+    dummies, no position) — easier to read than full-matrix VIF, which sparse dummies inflate."""
+    if not HAVE_STATSMODELS:
+        return []
+    cols: dict[str, pd.Series] = {}
+    for f in focal_features:
+        if f not in work.columns:
+            continue
+        s = pd.to_numeric(work[f], errors="coerce")
+        if s.notna().mean() < _MIN_COVERAGE or s.dropna().nunique() < 2:
+            continue
+        cols[f] = s.fillna(s.median())
+    if len(cols) < 2:
+        return []
+    X = pd.DataFrame(cols)
+    X = X[X.notna().all(axis=1)]
+    X, _ = _drop_collinear(X, protect=set())
+    if X.shape[1] < 2:
+        return []
+    Xc = sm.add_constant(X.astype(float), has_constant="add")
+    vmap = _vif_map(Xc)
+    rows = []
+    for f in X.columns:
+        v = vmap.get(f)
+        lvl, interp = vif_level(v)
+        rows.append({"feature": labels.get(f, f.replace("_", " ")), "vif": v, "vif_level": lvl,
+                     "interpretation": interp, "feature_group": _feature_group(f)})
+    return rows
+
+
+def _reference_category_rows(diag: dict, work: pd.DataFrame) -> list[dict]:
+    ref = ((diag.get("diagnostics", {}) or {}).get("reference_levels", {}) or {})
+    rows = []
+    for var, reflvl in ref.items():
+        cats = (list(work[var].astype("string").fillna("unknown").value_counts().index)
+                if var in work.columns else [])
+        rows.append({"variable": var, "reference_category": reflvl,
+                     "all_categories": "; ".join(map(str, cats)),
+                     "notes": f"Dummy coefficients for {var} are read relative to the omitted reference '{reflvl}'."})
+    return rows
+
+
+def _mt_summary_rows(models: list[dict]) -> list[dict]:
+    rows = []
+    for m in models:
+        f = m["fit"]
+        if not f.get("fitted"):
+            continue
+        for fam, k in sorted((f.get("bh_families") or {}).items()):
+            rows.append({"model_name": m["model_name"], "feature_family": fam, "num_tests": k,
+                         "bh_applied": "yes" if k >= 2 else "no",
+                         "notes": ("Benjamini–Hochberg applied within this family/model"
+                                   if k >= 2 else "single test in family — q equals raw p")})
+    return rows
+
+
+def _logit_ame_check_rows(fit: dict) -> list[dict]:
+    """Side-by-side LPM Δprob vs logit AME for each focal feature, with sign agreement +
+    a logit_status (ok / failed_perfect_separation / skipped). LPM stays the headline."""
+    ame = {a["name"]: a for a in fit.get("ame", [])}
+    sep = bool((fit.get("diagnostics", {}) or {}).get("separation"))
+    rows = []
+    for c in fit.get("coefficients", []):
+        if not c.get("is_focal"):
+            continue
+        a = ame.get(c["name"])
+        if a:
+            status, am, lo, hi = "ok", a["ame"], a["ci_low"], a["ci_high"]
+        elif sep:
+            status, am, lo, hi = "failed_perfect_separation", None, None, None
+        else:
+            status, am, lo, hi = "skipped", None, None, None
+        lpm = c["estimate"]
+        sign_agrees = (None if (am is None or lpm is None) else bool((lpm >= 0) == (am >= 0)))
+        rows.append({"feature": c["label"], "lpm_delta_prob": lpm,
+                     "lpm_ci_low": c["ci_low"], "lpm_ci_high": c["ci_high"],
+                     "logit_ame": am, "logit_ame_ci_low": lo, "logit_ame_ci_high": hi,
+                     "sign_agrees": sign_agrees, "logit_status": status})
+    return rows
+
+
+def _is_binary(s: pd.Series) -> bool:
+    vals = set(np.unique(s.dropna().values).tolist())
+    return bool(vals) and vals.issubset({0.0, 1.0})
+
+
+def _separation_rows(work: pd.DataFrame, labels: dict, outcome: str = "cited") -> list[dict]:
+    rows = []
+    if outcome not in work.columns:
+        return rows
+    y = pd.to_numeric(work[outcome], errors="coerce")
+    for feat in _BINARY_DIAG_FEATURES:
+        if feat not in work.columns:
+            continue
+        s = pd.to_numeric(work[feat], errors="coerce")
+        if not _is_binary(s):
+            continue
+        m1, m0 = (s == 1) & y.notna(), (s == 0) & y.notna()
+        n1, n0 = int(m1.sum()), int(m0.sum())
+        if n1 == 0 and n0 == 0:
+            continue
+        r1 = round(float(y[m1].mean()), 3) if n1 else None
+        r0 = round(float(y[m0].mean()), 3) if n0 else None
+        sep = (r1 in (0.0, 1.0)) or (r0 in (0.0, 1.0)) or n1 < _MIN_SUPPORT or n0 < _MIN_SUPPORT
+        rows.append({"feature": labels.get(feat, feat.replace("_", " ")), "possible_separation": bool(sep),
+                     "cited_rate_when_feature_1": r1, "cited_rate_when_feature_0": r0,
+                     "n_feature_1": n1, "n_feature_0": n0,
+                     "notes": ("Feature predicts citation almost perfectly — logit may not converge; "
+                               "rely on the LPM." if sep else "")})
+    return rows
+
+
+def _dedup_rows(work: pd.DataFrame) -> list[dict]:
+    rows = []
+    n = len(work)
+
+    def add(check, count, note):
+        rows.append({"check": check, "n_affected": int(count), "note": note})
+
+    if "url" in work.columns:
+        urls = work["url"].astype("string")
+        add("duplicate_raw_url", n - urls.nunique(dropna=True), "Identical url scored more than once.")
+        low = urls.fillna("").str.lower()
+        scheme_norm = low.str.replace(r"^https?://", "", regex=True).str.replace(r"/+$", "", regex=True)
+        add("http_https_or_trailing_slash_dupes", n - scheme_norm.nunique(),
+            "URLs equal after dropping scheme (http/https) + trailing slash.")
+        add("tracking_param_urls", int(low.str.contains(r"utm_|gclid|fbclid", regex=True, na=False).sum()),
+            "URLs carry UTM/click tracking params — canonicalize before deduping.")
+    if "normalized_url" in work.columns:
+        add("duplicate_normalized_url", n - work["normalized_url"].astype("string").nunique(dropna=True),
+            "Identical normalized_url scored more than once.")
+    for cand in ("canonical_url", "page_id"):
+        if cand in work.columns:
+            add(f"duplicate_{cand}", n - work[cand].astype("string").nunique(dropna=True),
+                f"Same {cand} scored repeatedly (repeated measurement — consider clustering on it).")
+    if "domain" in work.columns and "url" in work.columns:
+        path = work["url"].astype("string").fillna("").str.replace(r"\?.*$", "", regex=True)
+        key = work["domain"].astype("string").fillna("") + "|" + path
+        add("same_domain_similar_path", n - key.nunique(), "Same domain + path (query stripped) repeats.")
+    return rows
+
+
+def _scrape_success_rows(work: pd.DataFrame) -> list[dict]:
+    if "scrape_success" not in work.columns:
+        return []
+    ss = work["scrape_success"].astype(float)
+    cited = pd.to_numeric(work["cited"], errors="coerce") if "cited" in work.columns else None
+    rows = []
+
+    def add(kind, val, mask, warning=""):
+        sub = ss[mask]
+        if len(sub):
+            rows.append({"group_kind": kind, "group_value": str(val),
+                         "scrape_success_rate": round(float(sub.mean()), 3),
+                         "row_count": int(len(sub)), "warning": warning})
+
+    if cited is not None:
+        add("cited_status", "cited", cited == 1)
+        add("cited_status", "more_only", cited == 0)
+        rc = float(ss[cited == 1].mean()) if (cited == 1).any() else float("nan")
+        rm = float(ss[cited == 0].mean()) if (cited == 0).any() else float("nan")
+        if np.isfinite(rc) and np.isfinite(rm) and abs(rc - rm) >= 0.15:
+            rows.append({"group_kind": "WARNING", "group_value": "cited_vs_more_only",
+                         "scrape_success_rate": round(abs(rc - rm), 3), "row_count": int(len(work)),
+                         "warning": "Scrape success differs strongly between cited and more-only — "
+                                    "missingness may be informative (selection), not random."})
+    for col, kind in (("source_type", "source_type"), ("page_type", "page_type")):
+        if col in work.columns:
+            for val in work[col].astype("string").fillna("unknown").value_counts().head(12).index:
+                add(kind, val, work[col].astype("string").fillna("unknown") == val)
+    if "domain" in work.columns:
+        for val in work["domain"].astype("string").fillna("unknown").value_counts().head(10).index:
+            add("domain", val, work["domain"].astype("string").fillna("unknown") == val)
+    return rows
+
+
+def _overlap_rows(work: pd.DataFrame, labels: dict) -> list[dict]:
+    rows = []
+    for feat, cat in _OVERLAP_PAIRS:
+        if feat not in work.columns or cat not in work.columns:
+            continue
+        s = pd.to_numeric(work[feat], errors="coerce")
+        if not _is_binary(s):
+            continue
+        pres = work[s == 1]
+        if len(pres) < _MIN_SUPPORT:
+            continue
+        dist = pres[cat].astype("string").fillna("unknown").value_counts(normalize=True)
+        top, share = str(dist.index[0]), float(dist.iloc[0])
+        flag = share >= 0.90
+        rows.append({"feature": labels.get(feat, feat.replace("_", " ")), "category": cat,
+                     "top_category": top, "share_in_top_category": round(share, 3),
+                     "n_feature_present": int(len(pres)), "near_exclusive": bool(flag),
+                     "notes": (f"Almost only present in {cat}={top}; its effect cannot be separated "
+                               f"from that {cat} category (positivity/overlap violation)." if flag else "")})
+    return rows
+
+
+def _rare_rows(work: pd.DataFrame, labels: dict) -> list[dict]:
+    rows = []
+    for feat in _BINARY_DIAG_FEATURES:
+        if feat not in work.columns:
+            continue
+        s = pd.to_numeric(work[feat], errors="coerce")
+        if not _is_binary(s):
+            continue
+        ntot = int(s.notna().sum())
+        if ntot == 0:
+            continue
+        npos = int((s == 1).sum())
+        prev = npos / ntot
+        if prev < 0.05 or prev > 0.95:
+            rows.append({"feature": labels.get(feat, feat.replace("_", " ")), "prevalence": round(prev, 3),
+                         "n_positive": npos, "n_total": ntot,
+                         "warning": "Rare/near-constant feature — unstable coefficient and wide CI."})
+    return rows
+
+
+def _missingness_rows(work: pd.DataFrame) -> list[dict]:
+    feats = [f for f in (_CONTENT_FEATURES + _PROMPT_SIM) if f in work.columns]
+    if not feats:
+        return []
+    miss = work[feats].apply(lambda c: pd.to_numeric(c, errors="coerce")).isna()
+    n_missing = miss.sum(axis=1)
+    any_missing = miss.any(axis=1).astype(float)
+    rows = []
+
+    def add(kind, val, mask):
+        if int(mask.sum()):
+            rows.append({"group_kind": kind, "group_value": str(val),
+                         "mean_features_missing": round(float(n_missing[mask].mean()), 2),
+                         "share_any_missing": round(float(any_missing[mask].mean()), 3),
+                         "row_count": int(mask.sum())})
+
+    if "cited" in work.columns:
+        cited = pd.to_numeric(work["cited"], errors="coerce")
+        add("cited_status", "cited", cited == 1)
+        add("cited_status", "more_only", cited == 0)
+    if "source_type" in work.columns:
+        st = work["source_type"].astype("string").fillna("unknown")
+        for val in st.value_counts().head(12).index:
+            add("source_type", val, st == val)
+    return rows
+
+
+# --------------------------------------------------------------------------- #
 # model comparison / sensitivity analysis (A / B / C / D + a FULL diagnostic fit)
 # --------------------------------------------------------------------------- #
 def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str = "source_position",
-                     position_fallbacks=("observed_rank",), cluster_candidates=("domain", "record_id", "run_id"),
+                     position_fallbacks=("observed_rank",), cluster_candidates=_CLUSTER_PREFERENCE,
                      labels: dict | None = None, phase_map: dict | None = None) -> dict:
     """Fit content-only (A), +source/authority (B), +position (C), and reduced-similarity (D)
     specifications, plus a FULL diagnostic fit, and return the comparison table + VIF /
@@ -830,40 +1159,38 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
     labels = {**_DEFAULT_LABELS, **(labels or {})}
     work = df.copy()
 
-    # combined relevance score (standardized mean of available similarity features) for Model D
-    sims = [c for c in _SIM_CONTINUOUS if c in work.columns
+    # Combined relevance_score for Model D: z-score each PROMPT-based similarity (answer-derived
+    # similarity is deliberately excluded), average the available z-scores, keep a missingness count.
+    sims = [c for c in _PROMPT_SIM if c in work.columns
             and pd.to_numeric(work[c], errors="coerce").notna().sum() > 3]
     if sims:
         Z = work[sims].apply(pd.to_numeric, errors="coerce")
         work["relevance_score"] = ((Z - Z.mean()) / Z.std(ddof=0).replace(0, 1)).mean(axis=1)
+        work["relevance_n_missing"] = Z.isna().sum(axis=1).astype(float)
 
-    # cluster: prefer domain, then record_id / run_id
-    cluster_key, cluster_count = None, None
-    for cand in cluster_candidates:
-        if cand in work.columns:
-            nun = int(work[cand].astype("string").nunique(dropna=True))
-            if nun >= 2:
-                cluster_key, cluster_count = cand, nun
-                break
+    # Safer clustering: domain → prompt_id → record_id → repeated page key. Never a unique id
+    # (degenerate) or a single run; warns below ~MIN_CLUSTERS.
+    cluster_key, cluster_count, cluster_warning = choose_cluster(work, candidates=cluster_candidates)
 
     content = [c for c in _CONTENT_FEATURES if c in work.columns]
     src_bool = [c for c in _SOURCE_BOOL if c in work.columns]
     cats = [c for c in _SOURCE_CATS if c in work.columns]
     has_pos = position_col in work.columns or any(f in work.columns for f in position_fallbacks)
 
-    def _spec(title, focal, with_cats, with_pos, notes):
+    def _spec(title, focal, with_cats, with_pos, notes, logit=False):
         return (title, notes, build_spec(
             focal=focal, position_col=(position_col if with_pos else None),
             position_fallbacks=(list(position_fallbacks) if with_pos else []),
             categoricals=(cats if with_cats else []), cluster_key=cluster_key, phase_map=phase_map or {},
-            labels=labels, context=context, title=title, crosscheck_logit=False, wild_bootstrap=True))
+            labels=labels, context=context, title=title, crosscheck_logit=logit, wild_bootstrap=True))
 
     rel = ["relevance_score"] if "relevance_score" in work.columns else []
     specs = [
         _spec("A · content only", content, False, False, "content/page features only"),
         _spec("B · + source/authority", content + src_bool, True, False,
-              "A + source_type / official / brand / page_type / intent"),
-        _spec("C · + source position", content + src_bool, True, True, "B + log1p(source_position)"),
+              "A + source_type / official / brand / page_type / intent (no position)"),
+        _spec("C · + source position", content + src_bool, True, True,
+              "B + log1p(source_position); logit AME cross-check runs on this spec", logit=True),
         _spec("D · reduced similarity", content + src_bool + rel, True, True,
               "C + a single combined relevance_score (not all similarity features)"),
     ]
@@ -871,11 +1198,14 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
     for title, notes, spec in specs:
         models.append({"model_name": title, "spec_notes": notes, "fit": fit_citation_model(work, spec)})
 
-    # FULL diagnostic fit: everything incl. all (collinear) similarity features → surfaces VIF
-    full_focal = content + src_bool + [c for c in _SIM_CONTINUOUS if c in work.columns]
-    _, _, full_spec = _spec("FULL · all features (diagnostic)", full_focal, True, has_pos, "all features incl. raw similarities")
+    # FULL diagnostic fit: everything incl. all (collinear) PROMPT-similarity features → surfaces VIF
+    full_focal = content + src_bool + [c for c in _PROMPT_SIM if c in work.columns]
+    _, _, full_spec = _spec("FULL · all features (diagnostic)", full_focal, True, has_pos,
+                            "all features incl. raw prompt-similarities (diagnostic only)")
     full = fit_citation_model(work, full_spec)
     diag = full if full.get("fitted") else next((m["fit"] for m in reversed(models) if m["fit"].get("fitted")), full)
+    model_c = next((m["fit"] for m in models if m["model_name"].startswith("C") and m["fit"].get("fitted")), diag)
+    model_b = next((m["fit"] for m in models if m["model_name"].startswith("B") and m["fit"].get("fitted")), None)
 
     comparison_rows = []
     for m in models:
@@ -889,22 +1219,43 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
                 "feature": c["label"], "model_name": m["model_name"], "delta_prob": c["estimate"],
                 "se": c["se"], "ci_low": c["ci_low"], "ci_high": c["ci_high"], "p": c["p"],
                 "q_bh": c.get("p_adj"), "vif": c.get("vif"), "n": f["n"],
+                "feature_group": _feature_group(c["name"]),
                 "cluster_variable": f.get("cluster_key"), "cluster_count": f.get("n_clusters"),
                 "spec_notes": m["spec_notes"],
             })
 
     warnings = list(diag.get("warnings", []))
+    if cluster_warning:
+        msg = f"Clustered by {cluster_key} ({cluster_count} clusters). {cluster_warning}"
+        if msg not in warnings:
+            warnings.append(msg)
     sim_sev = [c for c in diag.get("coefficients", []) if _feature_group(c["name"]) == "relevance"
                and c.get("vif") is not None and c["vif"] > config.VIF_PROBLEM]
     if len(sim_sev) >= 2:
         warnings.append("Similarity/relevance features have severe VIF (>10) as a group — reduce them to a "
                         "single relevance score (Model D) rather than interpreting them separately.")
 
+    focal_numeric = [f for f in (content + rel) if f in work.columns]
     return {
         "available": True, "fitted": bool(diag.get("fitted")), "context": context,
-        "cluster_variable": cluster_key, "cluster_count": cluster_count,
+        "cluster_variable": cluster_key, "cluster_count": cluster_count, "cluster_warning": cluster_warning,
         "models": models, "full_model": full, "diagnostic_model": diag,
-        "comparison_rows": comparison_rows, "vif_rows": _vif_rows(diag),
+        "model_b": model_b, "model_c": model_c,
+        "comparison_rows": comparison_rows,
+        "vif_rows": _vif_rows(diag),                       # full-matrix VIF (back-compat name)
+        "vif_full_rows": _vif_rows(diag),
+        "vif_focal_rows": _vif_focal_rows(work, focal_numeric, labels),
+        "condition_number": (diag.get("diagnostics", {}) or {}).get("condition_number"),
+        "reference_categories": _reference_category_rows(diag, work),
+        "multiple_testing_summary": _mt_summary_rows(models),
+        "logit_ame_check": _logit_ame_check_rows(model_c),
+        "separation_diagnostics": _separation_rows(work, labels),
+        "dedup_diagnostics": _dedup_rows(work),
+        "scrape_success_diagnostics": _scrape_success_rows(work),
+        "overlap_diagnostics": _overlap_rows(work, labels),
+        "rare_feature_diagnostics": _rare_rows(work, labels),
+        "missingness_diagnostics": _missingness_rows(work),
+        "outcome_definition": config.OUTCOME_DEFINITION_TEXT,
         "anomaly_rows": _anomaly_rows(diag), "group_rows": _group_rows(diag),
         "executive_summary": _exec_summary(diag, models, cluster_key, cluster_count),
         "warnings": warnings,

@@ -23,7 +23,7 @@ Similarity = a *semantic overlap proxy*, not proof of use.
 ```bash
 source .venv/bin/activate
 streamlit run app.py                 # launch UI (no keys? click "Load demo run" / "Load sample")
-pytest -q                            # 71 tests
+pytest -q                            # 78 tests
 python -m compileall -q src ui app.py tests
 ```
 Keys live in `.env`: `GEMINI_API_KEY` (Gemini mode + embeddings), `APIFY_TOKEN` (scraping in BOTH modes).
@@ -55,7 +55,8 @@ Headless check: `streamlit.testing.v1.AppTest` over `app.py` (renders every view
 6. **Prompt Manifest + Intent → Source Type analysis** (commit `4254949`) — manifest (`prompt_id,topic,intent,prompt[,country,prompt_language,expected_source_types]`) matched to records by prompt text/hash → attaches intent/topic to every record/source/feature. "🎯 Intent" tab: intent×source-type counts+%, cited-by-intent, more-only-by-intent, cited-vs-more comparison, expected-vs-actual.
 7. **Upload limit → 500 MB** (`.streamlit/config.toml` `maxUploadSize/maxMessageSize`; needs server restart) + **AI-ready reports** — both reports now embed a feature dictionary, a feature↔citation correlation table, intent breakdowns (ChatGPT), an "how to analyze (for an AI)" guide, and the **raw per-source/candidate CSV**; ChatGPT adds an **Analysis bundle (JSON)** + per-source dataset CSV downloads. (commit `8ccc94d`)
 8. **Non-branded Brand Visibility Audit** (Iteration I, commit `4a667bf` on `main`) — `src/brand_visibility.py` layer + "🏷️ Brand Visibility" tab. Manifest gains `client_brand_terms_to_detect_in_output` / `competitor_terms_to_detect_in_output` / `prompt_is_nonbranded` / `visibility_goal`. For **non-branded** prompts: detects client/competitor in prompt/answer/sources/scraped pages → record table (all prompts kept = denominator), intent rollup (denominator = non-branded prompts; client-vs-competitor cited delta + examples), source/page table (brand-matched only), bilingual heuristic **content features** + `page_type`, **cited-vs-more-only** comparison, and **position-controlled** (1-3/4-6/7-10/11+) comparison. 6 CSV exports + report section + JSON block; offline brand demo (Thai hospital + auto).
-9. **Econometrics layer — position-adjusted citation model** (Iteration J, branch `econometrics-layer`) — `src/econometrics.py` (statsmodels): LPM of `cited` on features adjusting for position, HC3 / cluster-robust SEs (cluster `record_id`/`run_id`), wild cluster bootstrap (<40 clusters), VIF, Benjamini–Hochberg, logit+AME cross-check. Wired into all 3 modes + report + JSON + forest-plot UI. Reports **cautious effect estimates under stated assumptions + signed OVB** (scoped exception to the observational rule); keeps the old correlation table relabeled "unadjusted." Added `statsmodels`/`scipy` deps. _(latest)_
+9. **Econometrics layer — position-adjusted citation model** (Iteration J, branch `econometrics-layer`) — `src/econometrics.py` (statsmodels): LPM of `cited` on features adjusting for position, HC3 / cluster-robust SEs (cluster `record_id`/`run_id`), wild cluster bootstrap (<40 clusters), VIF, Benjamini–Hochberg, logit+AME cross-check. Wired into all 3 modes + report + JSON + forest-plot UI. Reports **cautious effect estimates under stated assumptions + signed OVB** (scoped exception to the observational rule); keeps the old correlation table relabeled "unadjusted." Added `statsmodels`/`scipy` deps.
+10. **Econometrics careful-reporting upgrade** (Iteration K, branch `econometrics-layer`) — **safer clustering** (`econometrics.choose_cluster`: prefer `domain`→`prompt_id`→`record_id`→repeated page key; skip degenerate unique-id / single-run; `cluster_variable`/`cluster_count`/`cluster_warning`). **BH within each model × feature family** (`fit_citation_model.bh_families` + `econometrics_multiple_testing_summary.csv`). **Prompt-vs-answer similarity separation** (answer-derived features barred from the main model; `relevance_score` built from prompt sims only + missingness count). **Missing-indicator** for every numeric feature in `design_matrix`. **VIF focal + full + condition number**; feature groups split (`content_structure`, `source_type`, `missingness`) with `num_p_lt_05`/`num_q_lt_10`/`warnings`. **Logit-AME cross-check table** (LPM headline) + **per-feature separation diagnostics**. New diagnostics: **dedup / scrape-success / overlap-positivity / rare-feature / reference-categories / outcome-definition**. Report `_sensitivity_section` gains exec-summary + interpretation-safety + model-spec + diagnostics + business-safe-recommendation sections; **16 econometrics exports** (CSV/TXT/2 forest PNGs: focal + no-position) wired in the ChatGPT Report tab; `components.sensitivity_block` renders the new tables. New `config.py` caveats (cluster-few / position-panel / LPM / missingness / reference / signed-OVB / business-rec / outcome-def / rare). 6 new tests. _(latest)_
 
 ## Repo state
 `main` = `4a667bf` (Non-branded Brand Visibility Audit, pushed). **Current branch = `econometrics-layer`** (off `4a667bf`),
@@ -66,8 +67,12 @@ holding the **Econometrics citation-model layer** (NEW `src/econometrics.py`; `a
 sensitivity/diagnostics extension** (`econometrics.model_comparison` + A/B/C/D specs + VIF/anomaly/group/
 exec-summary tables; content features on every ChatGPT source; `report.forest_png` + 4 CSV exporters +
 `_sensitivity_section`; `components.sensitivity_block` + ChatGPT analysis/report UI; `config.py` business
-caveats; `requirements.txt` matplotlib).
-**71 pytest tests pass; AppTest renders both modes incl. the regression + sensitivity sections.** Untracked reference files
+caveats; `requirements.txt` matplotlib) **plus the Iteration K careful-reporting upgrade** (safer
+`choose_cluster`; BH within model×family; prompt/answer similarity separation; numeric missing-indicators;
+VIF focal+full+condition number; logit-AME-check + separation/dedup/scrape/overlap/rare/reference-category/
+outcome-definition diagnostics; 16 econometrics exports incl. focal + no-position forest PNGs; expanded
+`_sensitivity_section`; new `config.py` caveats).
+**78 pytest tests pass; AppTest renders both modes incl. the regression + sensitivity sections; verified end-to-end on a real 1,270-source ChatGPT audit.** Untracked reference files
 (textbook PDFs, `docs/demo/` HTML, `scripts/`) deliberately left uncommitted (public repo — copyright/size). If you change
 code: run `pytest -q` + AppTest, then commit/push when the user asks.
 

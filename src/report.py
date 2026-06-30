@@ -189,6 +189,7 @@ def _regression_section(fits, a, *, header: str = "Position-adjusted citation mo
         return
     a(f"## {header} (LPM — cautious effect estimates)\n")
     a(f"> {config.CAVEAT_REGRESSION}\n")
+    a(f"> {config.CAVEAT_LPM_INTERPRET}\n")
     for f in fits:
         if not f.get("available", True):
             a(f"_{(f.get('warnings') or ['statsmodels not installed'])[0]}_\n")
@@ -236,6 +237,75 @@ def econometrics_anomaly_diagnostics_csv(mc: dict) -> str:
 
 def econometrics_feature_group_summary_csv(mc: dict) -> str:
     return _rows_csv((mc or {}).get("group_rows"), "no feature-group summary\n")
+
+
+def _vif_csv(rows) -> str:
+    cols = ["feature", "vif", "vif_level", "interpretation", "feature_group"]
+    if not rows:
+        return "no VIF diagnostics\n"
+    df = pd.DataFrame(rows)
+    return df[[c for c in cols if c in df.columns]].to_csv(index=False)
+
+
+def econometrics_vif_focal_csv(mc: dict) -> str:
+    """VIF on the focal content features only (easier to read than full-matrix VIF)."""
+    return _vif_csv((mc or {}).get("vif_focal_rows"))
+
+
+def econometrics_vif_full_csv(mc: dict) -> str:
+    """VIF on the full design matrix (sparse categorical dummies can inflate it)."""
+    return _vif_csv((mc or {}).get("vif_full_rows") or (mc or {}).get("vif_rows"))
+
+
+def econometrics_reference_categories_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("reference_categories"), "no categorical variables in the model\n")
+
+
+def econometrics_multiple_testing_summary_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("multiple_testing_summary"), "no multiple-testing summary\n")
+
+
+def econometrics_logit_ame_check_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("logit_ame_check"), "no logit AME cross-check (LPM is the headline)\n")
+
+
+def econometrics_separation_diagnostics_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("separation_diagnostics"), "no binary features to check for separation\n")
+
+
+def econometrics_dedup_diagnostics_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("dedup_diagnostics"), "no URL columns for dedup checks\n")
+
+
+def econometrics_scrape_success_diagnostics_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("scrape_success_diagnostics"), "no scrape_success column\n")
+
+
+def econometrics_overlap_diagnostics_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("overlap_diagnostics"), "no overlap/positivity pairs available\n")
+
+
+def econometrics_rare_feature_diagnostics_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("rare_feature_diagnostics"), "no rare features flagged\n")
+
+
+def econometrics_outcome_definition_txt(mc: dict) -> str:
+    return (mc or {}).get("outcome_definition") or config.OUTCOME_DEFINITION_TEXT
+
+
+def forest_png_focal(mc: dict, title: str = "Citation model — focal features (Model C)") -> bytes | None:
+    """Forest plot for focal features, WITH source position (Model C)."""
+    fit = (mc or {}).get("model_c") or (mc or {}).get("diagnostic_model")
+    return forest_png(fit, focal_only=True, title=title) if fit else None
+
+
+def forest_png_no_position(mc: dict, title: str = "Focal features — no source position (Model B)") -> bytes | None:
+    """Forest plot WITHOUT source position: Model B if available, else Model C with the
+    position group excluded."""
+    if (mc or {}).get("model_b"):
+        return forest_png(mc["model_b"], focal_only=True, title=title)
+    fit = (mc or {}).get("model_c") or (mc or {}).get("diagnostic_model")
+    return forest_png(fit, focal_only=True, exclude_groups=("position",), title=title) if fit else None
 
 
 def forest_png(fit: dict, *, exclude_groups=(), title: str | None = None, focal_only: bool = True) -> bytes | None:
@@ -289,16 +359,23 @@ def forest_png(fit: dict, *, exclude_groups=(), title: str | None = None, focal_
 
 
 def _sensitivity_section(mc: dict, a) -> None:
-    """Render the model-comparison sensitivity analysis + VIF/anomaly/group diagnostics."""
+    """Render the model-comparison sensitivity analysis + the full diagnostics suite
+    (model spec, reference categories, VIF focal/full, missing-data, scrape-success,
+    dedup, rare-feature, overlap/positivity, anomaly, grouped interpretation)."""
     if not mc or not mc.get("available"):
         return
     a("## Citation model — sensitivity & diagnostics\n")
+
+    # B. Interpretation safety section (verbatim-safe observational framing).
+    a("### Interpretation safety\n")
     a(f"> {config.CAVEAT_MODEL_OBSERVATIONAL}\n")
+    a(f"> {config.CAVEAT_LPM_INTERPRET}\n")
     if not mc.get("fitted"):
         a("_Not enough usable rows to fit the model comparison (needs a scraped, manifest-matched run "
           "with enough sources). The CSV exports are still generated (possibly empty)._\n")
         return
 
+    # A. Executive summary.
     es = mc.get("executive_summary") or []
     if es:
         a("### Executive summary\n")
@@ -307,10 +384,31 @@ def _sensitivity_section(mc: dict, a) -> None:
         a("")
 
     a("### Interpretation caveats\n")
-    for cv in (config.CAVEAT_POSITION_DOWNSTREAM, config.CAVEAT_SIMILARITY_FEATURES,
-               config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS):
+    for cv in (config.CAVEAT_POSITION_PANEL, config.CAVEAT_SIMILARITY_FEATURES,
+               config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS,
+               config.CAVEAT_MISSINGNESS, config.CAVEAT_REFERENCE_CATEGORY,
+               config.CAVEAT_OVB_CONFOUNDERS, config.CAVEAT_OVB_SIGNED_EXAMPLE):
         a(f"- {cv}")
     a("")
+
+    # C. Model specification section.
+    a("### Model specification\n")
+    a("- **Model A** — content/page features only (no source position, no source/page controls).")
+    a("- **Model B** — A + source-type / official / brand / page_type / intent controls (no source position).")
+    a("- **Model C** — B + `log1p(source_position)` (the headline model; logit AME cross-check runs here).")
+    a("- **Model D** — C but raw prompt-similarity features collapsed into one combined `relevance_score`.")
+    cv_, cc_ = mc.get("cluster_variable"), mc.get("cluster_count")
+    a(f"- **Clustering / SE** — clustered by `{cv_}` ({cc_} clusters); robust HC3 when no usable cluster. "
+      "Source position is included in Models C/D and **excluded** from A/B so content estimates can be read both ways.")
+    if mc.get("cluster_warning"):
+        a(f"> ⚠️ {mc['cluster_warning']}")
+    a("")
+
+    refs = pd.DataFrame(mc.get("reference_categories") or [])
+    if not refs.empty:
+        a("### Reference categories (omitted dummy levels)\n")
+        a(f"> {config.CAVEAT_REFERENCE_CATEGORY}\n")
+        a(_md_table(refs[["variable", "reference_category", "all_categories"]]))
 
     comp = pd.DataFrame(mc.get("comparison_rows") or [])
     if not comp.empty:
@@ -320,12 +418,61 @@ def _sensitivity_section(mc: dict, a) -> None:
           "collinearity. Full per-model SE/CI/p/q(BH)/VIF in `econometrics_model_comparison.csv`._\n")
         piv = comp.pivot_table(index="feature", columns="model_name", values="delta_prob", aggfunc="first")
         a(_md_table(piv.reset_index().round(4)))
-        a(f"_Clustered by **{mc.get('cluster_variable')}** ({mc.get('cluster_count')} clusters)._\n")
+        a(f"_Clustered by **{cv_}** ({cc_} clusters)._\n")
 
-    vif = pd.DataFrame(mc.get("vif_rows") or [])
-    if not vif.empty:
-        a("### VIF diagnostics (multicollinearity)\n")
-        a(_md_table(vif[["feature", "vif", "vif_level", "interpretation"]]))
+    # D. Diagnostics section.
+    a("### Diagnostics\n")
+    cond = mc.get("condition_number")
+    if cond is not None:
+        a(f"_Full design-matrix condition number ≈ **{cond:,.0f}** "
+          "(high values echo the multicollinearity the VIF tables show)._\n")
+    a("> High VIF indicates overlapping predictors and wider error bars, not necessarily biased coefficients.\n")
+    vf = pd.DataFrame(mc.get("vif_focal_rows") or [])
+    if not vf.empty:
+        a("**VIF — focal content features** (`econometrics_vif_focal.csv`)\n")
+        a(_md_table(vf[["feature", "vif", "vif_level", "interpretation"]]))
+    vfull = pd.DataFrame(mc.get("vif_full_rows") or mc.get("vif_rows") or [])
+    if not vfull.empty:
+        a("**VIF — full design matrix** (`econometrics_vif_full.csv`)\n")
+        a(_md_table(vfull[["feature", "vif", "vif_level", "interpretation"]]))
+
+    for title, key, cols, caveat in [
+        ("Missing-data summary", "missingness_diagnostics",
+         ["group_kind", "group_value", "mean_features_missing", "share_any_missing", "row_count"],
+         config.CAVEAT_MISSINGNESS),
+        ("Scrape-success summary", "scrape_success_diagnostics",
+         ["group_kind", "group_value", "scrape_success_rate", "row_count", "warning"], ""),
+        ("Deduplication / canonical-URL summary", "dedup_diagnostics",
+         ["check", "n_affected", "note"], ""),
+        ("Rare-feature warnings", "rare_feature_diagnostics",
+         ["feature", "prevalence", "n_positive", "n_total", "warning"], config.CAVEAT_RARE_FEATURES),
+        ("Overlap / positivity warnings", "overlap_diagnostics",
+         ["feature", "category", "top_category", "share_in_top_category", "near_exclusive", "notes"], ""),
+        ("Multiple-testing summary (BH within model × family)", "multiple_testing_summary",
+         ["model_name", "feature_family", "num_tests", "bh_applied", "notes"], ""),
+    ]:
+        rows = pd.DataFrame(mc.get(key) or [])
+        if not rows.empty:
+            a(f"**{title}**\n")
+            if caveat:
+                a(f"> {caveat}\n")
+            a(_md_table(rows[[c for c in cols if c in rows.columns]]))
+
+    ame = pd.DataFrame(mc.get("logit_ame_check") or [])
+    if not ame.empty:
+        a("**Logit AME cross-check (robustness only — LPM is the headline)**\n")
+        a("_`p` is the unadjusted p-value; `q_bh` (in the model-comparison CSV) is the Benjamini–Hochberg "
+          "value within the stated model × feature family. `logit_status = failed_perfect_separation` means "
+          "the logit did not converge; the LPM estimate is still reported._\n")
+        a(_md_table(ame[["feature", "lpm_delta_prob", "logit_ame", "sign_agrees", "logit_status"]]))
+
+    sep = pd.DataFrame(mc.get("separation_diagnostics") or [])
+    if not sep.empty:
+        flagged = sep[sep["possible_separation"]] if "possible_separation" in sep.columns else sep.iloc[0:0]
+        if not flagged.empty:
+            a("**Perfect / quasi-separation flags**\n")
+            a(_md_table(flagged[["feature", "cited_rate_when_feature_1", "cited_rate_when_feature_0",
+                                 "n_feature_1", "n_feature_0", "notes"]]))
 
     a("### Anomaly diagnostics\n")
     anom = pd.DataFrame(mc.get("anomaly_rows") or [])
@@ -338,7 +485,11 @@ def _sensitivity_section(mc: dict, a) -> None:
     if not grp.empty:
         a("### Feature group summary\n")
         a(_md_table(grp[["feature_group", "num_features", "top_positive_features", "top_negative_features",
-                         "num_significant_p_05", "num_significant_q_10", "interpretation"]]))
+                         "num_p_lt_05", "num_q_lt_10", "interpretation", "warnings"]]))
+
+    # E. Business-safe recommendation section.
+    a("### Business-safe recommendation\n")
+    a(f"> {config.CAVEAT_BUSINESS_REC}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -737,7 +888,11 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
     mc = (an or {}).get("regression_comparison")
     if mc and mc.get("available"):
         bundle["regression_comparison"] = {k: mc.get(k) for k in (
-            "fitted", "cluster_variable", "cluster_count", "comparison_rows", "vif_rows",
+            "fitted", "cluster_variable", "cluster_count", "cluster_warning", "condition_number",
+            "comparison_rows", "vif_focal_rows", "vif_full_rows", "reference_categories",
+            "multiple_testing_summary", "logit_ame_check", "separation_diagnostics",
+            "dedup_diagnostics", "scrape_success_diagnostics", "overlap_diagnostics",
+            "rare_feature_diagnostics", "missingness_diagnostics", "outcome_definition",
             "anomaly_rows", "group_rows", "executive_summary", "warnings")}
     if brand and brand.get("has_terms"):
         bundle["brand_visibility"] = {

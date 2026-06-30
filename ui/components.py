@@ -163,11 +163,17 @@ def sensitivity_block(mc) -> None:
         return
 
     st.warning(config.CAVEAT_MODEL_OBSERVATIONAL, icon="📐")
+    st.caption(config.CAVEAT_LPM_INTERPRET)
+    if mc.get("cluster_warning"):
+        st.caption(f"⚠️ Clustered by `{mc.get('cluster_variable')}` "
+                   f"({mc.get('cluster_count')} clusters). {mc['cluster_warning']}")
     for s in mc.get("executive_summary") or []:
         st.markdown(f"- {s}")
     with st.expander("⚠️ Interpretation caveats"):
-        for cv in (config.CAVEAT_POSITION_DOWNSTREAM, config.CAVEAT_SIMILARITY_FEATURES,
-                   config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS):
+        for cv in (config.CAVEAT_POSITION_PANEL, config.CAVEAT_SIMILARITY_FEATURES,
+                   config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS,
+                   config.CAVEAT_MISSINGNESS, config.CAVEAT_REFERENCE_CATEGORY,
+                   config.CAVEAT_OVB_CONFOUNDERS, config.CAVEAT_OVB_SIGNED_EXAMPLE):
             st.markdown(f"- {cv}")
 
     comp = pd.DataFrame(mc.get("comparison_rows") or [])
@@ -179,21 +185,57 @@ def sensitivity_block(mc) -> None:
         st.caption("A coefficient stable across A→D is more trustworthy; large swings indicate confounding or "
                    "collinearity. A = content · B = +source/authority · C = +position · D = reduced similarity.")
 
-    cmod = next((m["fit"] for m in mc.get("models", []) if m["model_name"].startswith("C") and m["fit"].get("fitted")),
-                mc.get("diagnostic_model") or {})
-    p1 = report.forest_png(cmod, title="Position-adjusted (Model C)")
-    p2 = report.forest_png(cmod, exclude_groups=("authority", "page_type", "intent"), title="Content features only")
+    p1 = report.forest_png_focal(mc)                       # focal features WITH source position (Model C)
+    p2 = report.forest_png_no_position(mc)                 # focal features WITHOUT source position (Model B)
     if p1 or p2:
         fc = st.columns(2)
         if p1:
-            fc[0].image(p1, caption="Focal features (Δ probability ± 95% CI)")
+            fc[0].image(p1, caption="Focal features incl. source position (Δ probability ± 95% CI)")
         if p2:
-            fc[1].image(p2, caption="Content features only (excl. source position)")
+            fc[1].image(p2, caption="Focal features without source position")
 
-    vif = pd.DataFrame(mc.get("vif_rows") or [])
-    if not vif.empty:
+    refs = pd.DataFrame(mc.get("reference_categories") or [])
+    if not refs.empty:
+        with st.expander("Reference categories (omitted dummy levels)"):
+            st.caption(config.CAVEAT_REFERENCE_CATEGORY)
+            st.dataframe(refs[["variable", "reference_category", "all_categories"]],
+                         width="stretch", hide_index=True)
+
+    vf = pd.DataFrame(mc.get("vif_focal_rows") or [])
+    vfull = pd.DataFrame(mc.get("vif_full_rows") or mc.get("vif_rows") or [])
+    if not vf.empty or not vfull.empty:
         with st.expander("VIF diagnostics (multicollinearity)"):
-            st.dataframe(vif[["feature", "vif", "vif_level", "interpretation"]], width="stretch", hide_index=True)
+            st.caption("High VIF indicates overlapping predictors and wider error bars, not necessarily "
+                       "biased coefficients." + (f" · full-matrix condition number ≈ {mc['condition_number']:,.0f}"
+                                                 if mc.get("condition_number") is not None else ""))
+            if not vf.empty:
+                st.markdown("**Focal content features**")
+                st.dataframe(vf[["feature", "vif", "vif_level", "interpretation"]], width="stretch", hide_index=True)
+            if not vfull.empty:
+                st.markdown("**Full design matrix**")
+                st.dataframe(vfull[["feature", "vif", "vif_level", "interpretation"]], width="stretch", hide_index=True)
+
+    ame = pd.DataFrame(mc.get("logit_ame_check") or [])
+    if not ame.empty:
+        with st.expander("🔁 Logit AME cross-check (robustness only — LPM is the headline)"):
+            st.dataframe(ame[["feature", "lpm_delta_prob", "logit_ame", "sign_agrees", "logit_status"]],
+                         width="stretch", hide_index=True)
+
+    _diag_tables = [
+        ("Missing-data summary", "missingness_diagnostics"),
+        ("Scrape-success summary", "scrape_success_diagnostics"),
+        ("Deduplication / canonical-URL summary", "dedup_diagnostics"),
+        ("Rare-feature warnings", "rare_feature_diagnostics"),
+        ("Overlap / positivity warnings", "overlap_diagnostics"),
+        ("Multiple-testing summary (BH within model × family)", "multiple_testing_summary"),
+        ("Perfect/quasi-separation diagnostics", "separation_diagnostics"),
+    ]
+    have_diag = [(t, k) for t, k in _diag_tables if mc.get(k)]
+    if have_diag:
+        with st.expander("Data-quality & inference diagnostics"):
+            for title, key in have_diag:
+                st.markdown(f"**{title}**")
+                st.dataframe(pd.DataFrame(mc.get(key)), width="stretch", hide_index=True)
 
     st.markdown("**Anomaly diagnostics**")
     anom = pd.DataFrame(mc.get("anomaly_rows") or [])
@@ -207,6 +249,8 @@ def sensitivity_block(mc) -> None:
     if not grp.empty:
         with st.expander("Feature group summary"):
             st.dataframe(grp, width="stretch", hide_index=True)
+
+    st.info(config.CAVEAT_BUSINESS_REC, icon="🧭")
 
 
 def empty_state(message: str, icon: str = "🧭") -> None:

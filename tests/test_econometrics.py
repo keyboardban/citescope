@@ -423,3 +423,115 @@ def test_pipeline_carries_regression_comparison():
     an = cgp.analyze(feats)
     assert "regression_comparison" in an and an["regression_comparison"]["available"] is True
     json.dumps(an["regression_comparison"])                    # JSON-serializable
+
+
+# =========================================================================== #
+# Iteration K — careful-reporting upgrade (clustering, diagnostics, wording)
+# =========================================================================== #
+def _rich_source_df(seed=11):
+    """`_source_df` + url / normalized_url / scrape_success / extra binary features and a
+    deliberately RARE feature — the inputs the new diagnostics consume."""
+    df = _source_df(seed=seed)
+    rng = np.random.default_rng(seed + 100)
+    n = len(df)
+    df["url"] = [f"https://{d}/p{i}?utm_source=x" if i % 9 == 0 else f"https://{d}/p{i}"
+                 for i, d in enumerate(df["domain"])]
+    df["normalized_url"] = [u.split("?")[0] for u in df["url"]]
+    df["scrape_success"] = rng.random(n) < 0.8
+    df["has_price_or_package"] = (rng.random(n) < 0.30).astype(int)
+    df["product_page"] = (rng.random(n) < 0.20).astype(int)
+    df["has_booking_or_appointment"] = (rng.random(n) < 0.20).astype(int)
+    df["has_email"] = (rng.random(n) < 0.02).astype(int)     # RARE (<5%) on purpose
+    return df
+
+
+# 26. every NEW diagnostic table + exporter is generated; safer clustering prefers domain
+def test_new_diagnostics_and_exporters_generated():
+    mc = E.model_comparison(_rich_source_df(seed=11), context="chatgpt")
+    assert mc["fitted"] and mc["cluster_variable"] == "domain"   # safer choice prefers domain
+    for key in ["reference_categories", "vif_focal_rows", "vif_full_rows", "multiple_testing_summary",
+                "logit_ame_check", "separation_diagnostics", "dedup_diagnostics",
+                "scrape_success_diagnostics", "overlap_diagnostics", "rare_feature_diagnostics",
+                "missingness_diagnostics"]:
+        assert isinstance(mc.get(key), list) and mc[key], f"{key} empty"
+    assert mc["condition_number"] is not None
+    assert "more-only" in mc["outcome_definition"]
+    assert any("faq" in r["feature"].lower() or "email" in r["feature"].lower()
+               for r in mc["rare_feature_diagnostics"]) or mc["rare_feature_diagnostics"]
+    for fn, head in [
+        (report.econometrics_reference_categories_csv, "variable,reference_category"),
+        (report.econometrics_vif_focal_csv, "feature,vif,vif_level"),
+        (report.econometrics_vif_full_csv, "feature,vif,vif_level"),
+        (report.econometrics_multiple_testing_summary_csv, "model_name,feature_family,num_tests"),
+        (report.econometrics_logit_ame_check_csv, "feature,lpm_delta_prob"),
+        (report.econometrics_separation_diagnostics_csv, "feature,possible_separation"),
+        (report.econometrics_dedup_diagnostics_csv, "check,n_affected"),
+        (report.econometrics_scrape_success_diagnostics_csv, "group_kind,group_value"),
+        (report.econometrics_overlap_diagnostics_csv, "feature,category"),
+        (report.econometrics_rare_feature_diagnostics_csv, "feature,prevalence"),
+    ]:
+        out = fn(mc)
+        assert isinstance(out, str) and out.startswith(head) and len(out.splitlines()) > 1, fn.__name__
+    assert report.econometrics_outcome_definition_txt(mc).startswith("Outcome definition")
+    assert report.forest_png_focal(mc)[:8] == b"\x89PNG\r\n\x1a\n"
+    assert report.forest_png_no_position(mc)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# 27. logit AME cross-check + separation table handle perfect separation without crashing
+def test_logit_ame_check_handles_separation():
+    df = _rich_source_df(seed=7)
+    df["cited"] = df["has_faq"].astype(int)            # perfect separation: cited == has_faq
+    mc = E.model_comparison(df, context="chatgpt")
+    rows = mc["logit_ame_check"]
+    assert rows and {r["logit_status"] for r in rows} <= {"ok", "failed_perfect_separation", "skipped"}
+    flagged = [s for s in mc["separation_diagnostics"] if s["possible_separation"]]
+    assert any("faq" in s["feature"].lower() for s in flagged)
+    json.dumps(mc["logit_ame_check"])                  # serializable, no crash
+
+
+# 28. BH is applied within each model AND each feature family (q >= p inside every family)
+def test_bh_within_model_and_family():
+    mc = E.model_comparison(_rich_source_df(seed=9), context="chatgpt")
+    mt = mc["multiple_testing_summary"]
+    assert mt and any(r["num_tests"] >= 2 and r["bh_applied"] == "yes" for r in mt)
+    from collections import defaultdict
+    fam = defaultdict(list)
+    for c in mc["model_c"]["coefficients"]:
+        if c["is_focal"] and c["p"] is not None and c["p_adj"] is not None:
+            fam[E._feature_group(c["name"])].append(c)
+    assert fam and all(all(c["p_adj"] >= c["p"] - 1e-9 for c in cs) for cs in fam.values())
+
+
+# 29. source_position is described as an observable source-panel position (not an AI/Google rank)
+def test_position_described_as_observable_panel():
+    mc = E.model_comparison(_rich_source_df(seed=8), context="chatgpt")
+    lines = []
+    report._sensitivity_section(mc, lines.append)
+    md = "\n".join(lines).lower()
+    assert "observable source panel position" in md
+    assert "associated with" in md                     # LPM controlled-association wording
+    assert "reference categor" in md                   # reference category section present
+    for banned in ("ai rejected", "ai ignored", "causes citation", "caused by", "google rank of"):
+        assert banned not in md
+
+
+# 30. answer-derived similarity stays OUT of the main model (only prompt-based admitted)
+def test_answer_similarity_excluded_from_main_model():
+    df = _rich_source_df(seed=12)
+    df["page_answer_similarity"] = np.random.default_rng(1).random(len(df))   # circular feature
+    df["answer_like_text_in_first_500_chars"] = (np.random.default_rng(2).random(len(df)) < 0.5).astype(int)
+    mc = E.model_comparison(df, context="chatgpt")
+    used = {c["feature"].lower() for c in mc["comparison_rows"]}
+    assert not any("answer" in u for u in used)        # no answer-derived feature entered any A/B/C/D model
+
+
+# 31. safer clustering avoids degenerate ids and warns below the cluster floor
+def test_choose_cluster_is_safe():
+    # unique record_id (one row each) is degenerate → skip; fall back to domain
+    df = pd.DataFrame({"cited": [0, 1] * 30, "record_id": [f"r{i}" for i in range(60)],
+                       "domain": [f"d{i % 5}" for i in range(60)], "run_id": ["only"] * 60})
+    key, count, warn = E.choose_cluster(df)
+    assert key == "domain" and count == 5 and warn      # 5 < 40 → warning string set
+    # single run_id is never chosen (only one cluster)
+    df2 = pd.DataFrame({"cited": [0, 1] * 30, "run_id": ["only"] * 60})
+    assert E.choose_cluster(df2) == (None, None, "")

@@ -273,6 +273,73 @@ CAVEAT_AGE_FRESHNESS = (
     "If older pages are positively associated with citation, this may reflect authority, index "
     "history, or evergreen content rather than age itself."
 )
+# Few-cluster warning (exact business-facing wording).
+CAVEAT_CLUSTER_FEW = (
+    "Cluster-robust SE may be unstable with few clusters; consider wild cluster bootstrap or "
+    "interpret cautiously."
+)
+# Source-position language + the required with/without-position caveat.
+CAVEAT_POSITION_PANEL = (
+    "`source_position` is the **observable source panel position** (observed source order / source "
+    "panel placement) — not an internal AI rank, retrieval rank, or Google rank. It is a strong "
+    "observable placement feature, and because it may be downstream of relevance, source selection, "
+    "or source panel construction, content-feature estimates should be compared with and without "
+    "`source_position` (Models A/B vs C)."
+)
+# LPM reading template (controlled association, never bare causation).
+CAVEAT_LPM_INTERPRET = (
+    "Using a Linear Probability Model, a feature is **associated with a ±X percentage point "
+    "difference** in citation probability, **controlling for the included variables** — a controlled "
+    "association, not proof that adding the feature will cause more citations (unless the data came "
+    "from a randomized experiment, which this is not)."
+)
+# Missing-data caveat.
+CAVEAT_MISSINGNESS = (
+    "Missingness may be informative, especially when scrape failure or missing metadata differs by "
+    "source type, page type, or citation status. Numeric gaps are median-filled with a `*_missing` "
+    "indicator; categorical gaps enter as an explicit `unknown` level."
+)
+# Reference-category caveat for dummy variables.
+CAVEAT_REFERENCE_CATEGORY = (
+    "Dummy coefficients are interpreted **relative to the omitted reference category** (e.g. a "
+    "`page_type=article` coefficient of +0.30 means article pages are associated with +30 percentage "
+    "points higher citation probability **compared with the reference page type**, holding other "
+    "variables fixed)."
+)
+# Signed OVB example + the named-confounder list (cautious, hedged wording).
+CAVEAT_OVB_SIGNED_EXAMPLE = (
+    "Signed example: there may be **possible upward bias** if unobserved writing quality is positively "
+    "correlated with `has_faq` and positively affects citation probability — the estimate would then "
+    "overstate the FAQ association. The sign flips for a confounder negatively related to the feature."
+)
+CAVEAT_OVB_CONFOUNDERS = (
+    "Unobserved **writing quality**, **domain authority**, **source-panel placement**, **scrape "
+    "success**, and **page type** may confound content-feature associations. These are not measured "
+    "here, so coefficients are associations under the stated assumptions, not clean effects."
+)
+# Business-safe recommendation wording (do not strip access features; embed them in answer-ready pages).
+CAVEAT_BUSINESS_REC = (
+    "Do not interpret negative contact/location coefficients as evidence that contact information "
+    "should be removed. The result more likely indicates that thin access pages are less "
+    "citation-ready than answer-style article/product pages. A better recommendation is to embed "
+    "contact, price, booking, and location information **inside answer-ready product/service pages**."
+)
+# Rare-feature caveat.
+CAVEAT_RARE_FEATURES = (
+    "Rare features (prevalence <5% or >95%) can produce unstable coefficients and wide confidence "
+    "intervals — read them with caution or report them jointly."
+)
+# Outcome-definition block (exported verbatim as econometrics_outcome_definition.txt).
+OUTCOME_DEFINITION_TEXT = (
+    "Outcome definition — citation model\n"
+    "===================================\n"
+    "cited = 1  : the source was explicitly cited.\n"
+    "cited = 0  : the source was surfaced / shown as more-only but not cited.\n\n"
+    "This is NOT 'cited vs not retrieved'. more-only means surfaced but not cited.\n"
+    "Do not interpret more-only as rejected or ignored by the AI. source_position is the\n"
+    "observable source panel position (observed source order), not an internal AI rank,\n"
+    "retrieval rank, or Google rank.\n"
+)
 
 
 # --------------------------------------------------------------------------- #

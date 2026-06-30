@@ -415,6 +415,46 @@ to `config.py` (observational / position-as-mediator / contact-location / simila
 forest PNG, BH per-spec, similarity high-VIF flag, safe wording, content features on every source);
 `AppTest` renders both modes incl. the sensitivity section.
 
+### Iteration K — Econometrics careful-reporting upgrade (branch `econometrics-layer`)
+
+A statistical-care + business-safety pass over the citation model, driven by a structured review.
+
+- **Safer clustering.** `econometrics.choose_cluster(df)` prefers `domain → prompt_id → record_id →`
+  a repeated page key (`canonical_url`/`page_id`), and **skips degenerate choices**: a unique id (every
+  row its own cluster) or a single `run_id`. Returns `cluster_variable` / `cluster_count` /
+  `cluster_warning` (the "few clusters → consider the wild cluster bootstrap or interpret cautiously"
+  message below ~`MIN_CLUSTERS`). `model_comparison` uses it; warnings surface in report + UI.
+- **Similarity hygiene.** Prompt-based similarity (`_PROMPT_SIM`) is kept strictly separate from
+  **answer-derived/circular** similarity (`_ANSWER_SIM`, incl. `answer_like_text_in_first_500_chars`),
+  which is barred from the main A/B/C/D models. `relevance_score` (Model D) is the z-scored mean of the
+  **prompt** sims only, plus a missingness count.
+- **Missing data.** `design_matrix` now median-fills *every* numeric feature with a `*_missing` indicator
+  (a new `missingness` feature group), not just position; categoricals keep an explicit `unknown` level.
+  New `missingness_diagnostics` by cited-status / source-type + `CAVEAT_MISSINGNESS`.
+- **Multiple testing.** Benjamini–Hochberg is applied **within each model × feature family** (not all
+  focal mixed); `fit_citation_model` records `bh_families`, exported as `econometrics_multiple_testing_summary.csv`.
+- **Diagnostics suite** (all in `model_comparison`): VIF **focal** vs **full** + condition number;
+  `reference_categories` (omitted dummy levels); a **logit-AME cross-check table** (LPM stays the
+  headline; `logit_status=failed_perfect_separation` when it diverges); per-feature **separation**,
+  **dedup / canonical-URL**, **scrape-success** (cited vs more-only selection warning), **overlap /
+  positivity**, and **rare-feature** diagnostics; an `outcome_definition` text block.
+- **Feature groups** split into `content_structure` / `source_type` / `missingness`; group summary adds
+  `num_p_lt_05` / `num_q_lt_10` / `warnings`.
+- **Report & UI.** `report._sensitivity_section` gains executive-summary, interpretation-safety,
+  model-specification, diagnostics, and **business-safe-recommendation** sections (e.g. *don't* read a
+  negative contact coefficient as "remove contact info" — embed it in answer-ready pages). **16 exports**
+  wired into the ChatGPT Report tab (model_comparison, reference_categories, vif_focal, vif_full,
+  multiple_testing_summary, logit_ame_check, separation, dedup, scrape_success, overlap, rare_feature,
+  anomaly, feature_group_summary, outcome_definition.txt, **forest_plot_focal.png + forest_plot_no_position.png**).
+  `components.sensitivity_block` renders the new tables. New `config.py` caveats (cluster-few / position-panel /
+  LPM-controlled-association / missingness / reference-category / signed-OVB example + confounder list /
+  business-rec / outcome-definition / rare-feature). Source position is described everywhere as the
+  **observable source panel position** — never an internal AI / retrieval / Google rank.
+- **`pytest -q` → 78 passed** (6 new: every new diagnostic + exporter generated; separation handled without
+  crashing; BH within model×family; observable-panel wording; answer-similarity excluded; safe clustering).
+  Verified end-to-end on a real **1,270-source** ChatGPT audit (fits, clusters on 350 domains, renders the
+  full report + JSON + forests with no banned causal/AI-rejection wording).
+
 ---
 
 ## 5. Testing & verification (current)

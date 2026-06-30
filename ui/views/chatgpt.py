@@ -738,31 +738,40 @@ def _tab_report(ss) -> None:
     mc = an.get("regression_comparison")
     if mc and mc.get("available"):
         st.markdown("**Econometrics — sensitivity & diagnostics exports**")
-        e1 = st.columns(3)
-        e1[0].download_button("⬇️ econometrics_model_comparison.csv",
-                              report.econometrics_model_comparison_csv(mc),
-                              f"{rid}_econometrics_model_comparison.csv", "text/csv", width="stretch")
-        e1[1].download_button("⬇️ econometrics_vif_diagnostics.csv",
-                              report.econometrics_vif_diagnostics_csv(mc),
-                              f"{rid}_econometrics_vif_diagnostics.csv", "text/csv", width="stretch")
-        e1[2].download_button("⬇️ econometrics_anomaly_diagnostics.csv",
-                              report.econometrics_anomaly_diagnostics_csv(mc),
-                              f"{rid}_econometrics_anomaly_diagnostics.csv", "text/csv", width="stretch")
-        e2 = st.columns(3)
-        e2[0].download_button("⬇️ econometrics_feature_group_summary.csv",
-                              report.econometrics_feature_group_summary_csv(mc),
-                              f"{rid}_econometrics_feature_group_summary.csv", "text/csv", width="stretch")
-        _cmod = next((m["fit"] for m in mc.get("models", [])
-                      if m["model_name"].startswith("C") and m["fit"].get("fitted")), mc.get("diagnostic_model"))
-        _png = report.forest_png(_cmod, title="Position-adjusted citation model") if _cmod else None
-        _png2 = (report.forest_png(_cmod, exclude_groups=("authority", "page_type", "intent"),
-                                   title="Content features only") if _cmod else None)
-        if _png:
-            e2[1].download_button("⬇️ econometrics_forest_plot.png", _png,
-                                  f"{rid}_econometrics_forest_plot.png", "image/png", width="stretch")
-        if _png2:
-            e2[2].download_button("⬇️ econometrics_forest_plot_content_only.png", _png2,
-                                  f"{rid}_econometrics_forest_plot_content_only.png", "image/png", width="stretch")
+        _csv_exports = [
+            ("econometrics_model_comparison.csv", report.econometrics_model_comparison_csv(mc)),
+            ("econometrics_reference_categories.csv", report.econometrics_reference_categories_csv(mc)),
+            ("econometrics_vif_focal.csv", report.econometrics_vif_focal_csv(mc)),
+            ("econometrics_vif_full.csv", report.econometrics_vif_full_csv(mc)),
+            ("econometrics_multiple_testing_summary.csv", report.econometrics_multiple_testing_summary_csv(mc)),
+            ("econometrics_logit_ame_check.csv", report.econometrics_logit_ame_check_csv(mc)),
+            ("econometrics_separation_diagnostics.csv", report.econometrics_separation_diagnostics_csv(mc)),
+            ("econometrics_dedup_diagnostics.csv", report.econometrics_dedup_diagnostics_csv(mc)),
+            ("econometrics_scrape_success_diagnostics.csv", report.econometrics_scrape_success_diagnostics_csv(mc)),
+            ("econometrics_overlap_diagnostics.csv", report.econometrics_overlap_diagnostics_csv(mc)),
+            ("econometrics_rare_feature_diagnostics.csv", report.econometrics_rare_feature_diagnostics_csv(mc)),
+            ("econometrics_anomaly_diagnostics.csv", report.econometrics_anomaly_diagnostics_csv(mc)),
+            ("econometrics_feature_group_summary.csv", report.econometrics_feature_group_summary_csv(mc)),
+        ]
+        cc = st.columns(3)
+        for i, (fn, data) in enumerate(_csv_exports):
+            cc[i % 3].download_button(f"⬇️ {fn}", data, f"{rid}_{fn}", "text/csv",
+                                      width="stretch", key=f"econ_{fn}")
+        tcols = st.columns(3)
+        tcols[0].download_button("⬇️ econometrics_outcome_definition.txt",
+                                 report.econometrics_outcome_definition_txt(mc),
+                                 f"{rid}_econometrics_outcome_definition.txt", "text/plain",
+                                 width="stretch", key="econ_outcome_def")
+        _pf = report.forest_png_focal(mc)
+        _pn = report.forest_png_no_position(mc)
+        if _pf:
+            tcols[1].download_button("⬇️ econometrics_forest_plot_focal.png", _pf,
+                                     f"{rid}_econometrics_forest_plot_focal.png", "image/png",
+                                     width="stretch", key="econ_forest_focal")
+        if _pn:
+            tcols[2].download_button("⬇️ econometrics_forest_plot_no_position.png", _pn,
+                                     f"{rid}_econometrics_forest_plot_no_position.png", "image/png",
+                                     width="stretch", key="econ_forest_nopos")
 
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)
