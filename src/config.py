@@ -329,6 +329,22 @@ CAVEAT_RARE_FEATURES = (
     "Rare features (prevalence <5% or >95%) can produce unstable coefficients and wide confidence "
     "intervals — read them with caution or report them jointly."
 )
+# Confounder / proxy framework caveats.
+CAVEAT_CONFOUNDER_PROXY = (
+    "Confounder proxies reduce some omitted-variable risk but do not prove causality. The estimates "
+    "remain **controlled observational associations**. Proxies (e.g. CiteScope-observed domain "
+    "visibility, visibility history) are labelled as proxies — they are not the true construct "
+    "(external SEO authority, true index history)."
+)
+CAVEAT_PRICE_ASSOCIATION = (
+    "If a price/package feature is positive, do not claim price *causes* citations — price/package "
+    "pages are **associated with** citation within the observed sources."
+)
+CAVEAT_SOURCE_AVAILABILITY = (
+    "The model estimates citation **within surfaced sources**, not the probability of being retrieved "
+    "from the entire web. The AI's full retrieval candidate set is unobserved; visibility-count proxies "
+    "only describe what CiteScope has seen surfaced."
+)
 # Outcome-definition block (exported verbatim as econometrics_outcome_definition.txt).
 OUTCOME_DEFINITION_TEXT = (
     "Outcome definition — citation model\n"

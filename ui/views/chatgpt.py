@@ -773,6 +773,27 @@ def _tab_report(ss) -> None:
                                      f"{rid}_econometrics_forest_plot_no_position.png", "image/png",
                                      width="stretch", key="econ_forest_nopos")
 
+        if (mc.get("confounder_audit") or {}).get("available"):
+            st.markdown("**Confounder & proxy audit exports**")
+            _conf_exports = [
+                ("econometrics_confounder_registry.csv", report.econometrics_confounder_registry_csv(mc)),
+                ("econometrics_confounder_feature_availability.csv",
+                 report.econometrics_confounder_feature_availability_csv(mc)),
+                ("econometrics_confounder_proxy_summary.csv", report.econometrics_confounder_proxy_summary_csv(mc)),
+                ("econometrics_confounder_balance_by_cited.csv", report.econometrics_confounder_balance_by_cited_csv(mc)),
+                ("econometrics_confounder_correlation_matrix.csv",
+                 report.econometrics_confounder_correlation_matrix_csv(mc)),
+                ("econometrics_confounder_vif.csv", report.econometrics_confounder_vif_csv(mc)),
+            ]
+            ck = st.columns(3)
+            for i, (fn, data) in enumerate(_conf_exports):
+                ck[i % 3].download_button(f"⬇️ {fn}", data, f"{rid}_{fn}", "text/csv",
+                                          width="stretch", key=f"conf_{fn}")
+            st.download_button("⬇️ econometrics_unmeasured_confounders.md",
+                               report.econometrics_unmeasured_confounders_md(mc),
+                               f"{rid}_econometrics_unmeasured_confounders.md", "text/markdown",
+                               width="stretch", key="conf_unmeasured_md")
+
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)
         st.success(f"Saved: {path}")

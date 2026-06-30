@@ -455,6 +455,51 @@ A statistical-care + business-safety pass over the citation model, driven by a s
   Verified end-to-end on a real **1,270-source** ChatGPT audit (fits, clusters on 350 domains, renders the
   full report + JSON + forests with no banned causal/AI-rejection wording).
 
+### Iteration L — Confounder & proxy framework (branch `econometrics-layer`)
+
+Reduce omitted-variable risk **where the data allows** — add controls/proxies/diagnostics + explicit
+caveats for what cannot be measured. New module `src/confounders.py` (no Streamlit, defensive).
+
+- **Confounder registry** (`CONFOUNDER_REGISTRY`, 32 entries) — each with `confounder`, `category`,
+  `bias_mechanism`, `availability_status` (`available_directly` / `available_heuristic` / `proxy_only` /
+  `external_required` / `post_output_only` / `not_currently_available`), `proxy_possible`,
+  `requires_external_data`, `recommended_columns`, `model_role` (`main_control` / `sensitivity_control` /
+  `diagnostic_only` / `post_output_diagnostic_only` / `caveat_only`), `diagnostic_role`, `caveat`.
+- **Proxy derivation** (`derive_proxy_features`) — ~40 observable proxies with **no extra scraping**, all
+  labelled proxies (never the true construct): CiteScope-observed domain/url visibility counts
+  (`domain_seen_count`, `domain_citation_rate`, `domain_avg_source_position`, `url_seen_count`),
+  `citescope_visibility_history_score` (NOT `index_history_score`), URL semantics (`url_path_depth`,
+  `has_tracking_params`, `url_is_numeric_id`, product/service/Thai-slug flags, `is_marketplace`),
+  prompt-wording flags (`prompt_has_{price,official,safety,local,medical,recommendation,comparison}_terms`),
+  language/local heuristics (`thai_content_ratio`, `language_match`, `is_thai_domain`,
+  `country_relevance_score`, `contains_thailand_terms`), grouped content/trust scores
+  (`content_completeness_score`, `answer_ready_score`, `trust_signal_score`, `commercial_page_score`).
+  Every step records a derived/skipped note; missing columns never raise.
+- **Confounder audit** (`confounder_audit`) — 7 outputs: registry, **feature-availability** (per column:
+  present? derived? missing-rate), **proxy-summary** (proxy_quality: strong/moderate/weak/external/
+  post-output), **balance-by-cited** (cited vs more-only + diff + imbalance warning), **proxy correlation
+  matrix**, **proxy VIF**, **unmeasured-confounders** (constructs needing external data — true
+  authority/backlinks, GSC index history, full candidate set, internal AI ranking).
+- **Confounder-aware sensitivity Models E–H** in `model_comparison` — same focal as Model D, each tier
+  ADDS proxy **controls** (E: prompt-wording + language/local · F: + content completeness · G: + visibility
+  history · H: + metadata/access). They populate `confounder_comparison_rows` (shrinkage view) and are
+  **never the headline** — Model C stays headline; the A/B/C/D ladder (the 4-model count existing tests
+  assert) is unchanged.
+- **Bad-control safety** — answer-derived / post-output features (`brand_appeared_in_answer`,
+  `page_answer_similarity`, …) stay barred from every A–H model (test-verified); `source_position` keeps
+  with/without models + the mediator caveat; `scrape_success` is treated as a selection indicator.
+- **Report / UI / exports** — `report._confounder_section` ("Confounder & Proxy Audit": measurable vs
+  proxy-only vs external; D→E→F→G→H sensitivity; proxy quality/balance/VIF; unmeasured; business-safe
+  caveats), 6 CSV exporters + `econometrics_unmeasured_confounders.md`, a `confounder_audit` JSON block,
+  the `components.sensitivity_block` render, and 7 ChatGPT-Report-tab download buttons. New `config.py`
+  caveats: `CAVEAT_CONFOUNDER_PROXY` (proxies reduce, not remove, OVB → remain controlled observational
+  associations), `CAVEAT_PRICE_ASSOCIATION`, `CAVEAT_SOURCE_AVAILABILITY` (citation WITHIN surfaced
+  sources, not retrieval from the whole web).
+- **`pytest -q` → 88 passed** (`tests/test_confounders.py`, 10 new: registry completeness, defensive
+  derivation, all 7 audit tables, proxy labelling of domain/brand/index authority, post-output exclusion,
+  E–H optional-not-headline, exporters, safe wording, pipeline integration). Verified end-to-end on the
+  real 1,270-source audit (E–H all fit; full audit renders in report + JSON; no banned wording).
+
 ---
 
 ## 5. Testing & verification (current)

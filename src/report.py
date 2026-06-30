@@ -308,6 +308,73 @@ def forest_png_no_position(mc: dict, title: str = "Focal features — no source 
     return forest_png(fit, focal_only=True, exclude_groups=("position",), title=title) if fit else None
 
 
+# --------------------------------------------------------------------------- #
+# confounder & proxy audit exports
+# --------------------------------------------------------------------------- #
+def _audit(mc: dict) -> dict:
+    return (mc or {}).get("confounder_audit") or {}
+
+
+def econometrics_confounder_registry_csv(mc: dict) -> str:
+    return _rows_csv(_audit(mc).get("registry"), "no confounder registry\n")
+
+
+def econometrics_confounder_feature_availability_csv(mc: dict) -> str:
+    return _rows_csv(_audit(mc).get("feature_availability"), "no feature-availability table\n")
+
+
+def econometrics_confounder_proxy_summary_csv(mc: dict) -> str:
+    return _rows_csv(_audit(mc).get("proxy_summary"), "no proxy summary\n")
+
+
+def econometrics_confounder_balance_by_cited_csv(mc: dict) -> str:
+    return _rows_csv(_audit(mc).get("balance_by_cited"), "no balance table (needs cited + proxy features)\n")
+
+
+def econometrics_confounder_correlation_matrix_csv(mc: dict) -> str:
+    rows = _audit(mc).get("correlation_matrix")
+    return pd.DataFrame(rows).to_csv(index=False) if rows else "no numeric proxy features to correlate\n"
+
+
+def econometrics_confounder_vif_csv(mc: dict) -> str:
+    return _rows_csv(_audit(mc).get("confounder_vif"), "no confounder VIF\n")
+
+
+def econometrics_unmeasured_confounders_md(mc: dict) -> str:
+    """Human-readable `econometrics_unmeasured_confounders.md` (Confounder & Proxy Audit)."""
+    audit = _audit(mc)
+    L: list[str] = ["# Confounder & Proxy Audit — what we can measure, proxy, or only caveat", ""]
+    L.append(f"> {config.CAVEAT_CONFOUNDER_PROXY}")
+    L.append("")
+    L.append("## 1. What we can measure directly")
+    for x in ("observable source panel position", "scrape success", "page type / source type",
+              "prompt intent", "timestamp / run metadata"):
+        L.append(f"- {x}")
+    L.append("\n## 2. What we can only proxy (labelled as proxies, not the true construct)")
+    for x in ("writing quality", "domain authority — CiteScope-observed visibility (not external SEO authority)",
+              "brand authority", "index history — CiteScope visibility history (not search-engine index history)",
+              "content completeness", "source availability / surfaced selection"):
+        L.append(f"- {x}")
+    L.append("\n## 3. What requires external data")
+    for x in ("true domain authority / backlinks", "Google Search Console impressions / crawl history / first-indexed date",
+              "true brand search volume", "server crawl logs", "the complete search candidate set",
+              "internal AI retrieval / ranking signals", "exact search backend changes (if unavailable)"):
+        L.append(f"- {x}")
+    um = audit.get("unmeasured_confounders") or []
+    if um:
+        L.append("\n## 4. Confounders that cannot be directly measured here")
+        L.append("")
+        L.append("| confounder | why unmeasured | external data needed |")
+        L.append("|---|---|---|")
+        for r in um:
+            L.append(f"| {r.get('confounder','')} | {r.get('why_unmeasured','')} | {r.get('external_data_needed','')} |")
+    L.append("\n## 5. Business-safe caveats")
+    for cv in (config.CAVEAT_CONFOUNDER_PROXY, config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS,
+               config.CAVEAT_PRICE_ASSOCIATION, config.CAVEAT_POSITION_PANEL, config.CAVEAT_SOURCE_AVAILABILITY):
+        L.append(f"- {cv}")
+    return "\n".join(L) + "\n"
+
+
 def forest_png(fit: dict, *, exclude_groups=(), title: str | None = None, focal_only: bool = True) -> bytes | None:
     """Static matplotlib forest plot (Δ probability ± 95% CI) as PNG bytes. Returns None
     if matplotlib is unavailable or there are no plottable coefficients."""
@@ -490,6 +557,63 @@ def _sensitivity_section(mc: dict, a) -> None:
     # E. Business-safe recommendation section.
     a("### Business-safe recommendation\n")
     a(f"> {config.CAVEAT_BUSINESS_REC}\n")
+
+
+def _confounder_section(mc: dict, a) -> None:
+    """Render the 'Confounder and Proxy Audit' report section (registry-driven)."""
+    audit = (mc or {}).get("confounder_audit") or {}
+    if not audit.get("available"):
+        return
+    a("## Confounder & Proxy Audit\n")
+    a(f"> {config.CAVEAT_CONFOUNDER_PROXY}\n")
+
+    a("### What we can measure directly\n")
+    a("- Observable source panel position · scrape success · page type / source type · prompt intent · run metadata.\n")
+    a("### What we can only proxy (labelled as proxies, not the true construct)\n")
+    a("- Writing quality · domain authority (**CiteScope-observed visibility**, not external SEO authority) · "
+      "brand authority · index history (**CiteScope visibility history**, not search-engine index history) · "
+      "content completeness · source availability.\n")
+    a("### What requires external data\n")
+    a("- True domain authority / backlinks · Google Search Console crawl & first-indexed history · true brand "
+      "search volume · server crawl logs · the complete search candidate set · internal AI retrieval signals.\n")
+
+    conf = pd.DataFrame((mc or {}).get("confounder_comparison_rows") or [])
+    if not conf.empty:
+        a("### Confounder-aware sensitivity (Models D → E → F → G → H)\n")
+        a("_Focal Δprob as confounder proxies are added as **controls**. Stable across D→H = robust to the "
+          "measured proxies; shrinkage toward zero = part of the association was confounded. E–H are "
+          "**sensitivity models, not the headline** — too many controls can add multicollinearity / bad-control risk._\n")
+        piv = conf.pivot_table(index="feature", columns="model_name", values="delta_prob", aggfunc="first")
+        a(_md_table(piv.reset_index().round(4)))
+
+    ps = pd.DataFrame(audit.get("proxy_summary") or [])
+    if not ps.empty:
+        a("### Proxy quality\n")
+        a(_md_table(ps[["confounder", "proxy_features", "proxy_quality", "requires_external_data"]]))
+
+    bal = pd.DataFrame(audit.get("balance_by_cited") or [])
+    if not bal.empty:
+        a("### Confounder-proxy balance — cited vs more-only\n")
+        a(_md_table(bal[["confounder_proxy", "kind", "cited_value", "more_only_value",
+                         "difference", "missing_rate", "warning"]]))
+
+    cv = pd.DataFrame(audit.get("confounder_vif") or [])
+    if not cv.empty:
+        a("### Confounder-proxy VIF (avoid overloading the model)\n")
+        a(_md_table(cv[["confounder_proxy", "vif", "vif_level", "interpretation"]]))
+
+    um = pd.DataFrame(audit.get("unmeasured_confounders") or [])
+    if not um.empty:
+        a("### Unmeasured confounders (external data required)\n")
+        a(_md_table(um[["confounder", "why_unmeasured", "external_data_needed"]]))
+
+    a("### Business-safe caveats\n")
+    for cv_ in (config.CAVEAT_CONTACT_LOCATION, config.CAVEAT_AGE_FRESHNESS,
+                config.CAVEAT_PRICE_ASSOCIATION, config.CAVEAT_SOURCE_AVAILABILITY):
+        a(f"- {cv_}")
+    a("")
+    for w in audit.get("warnings", []):
+        a(f"> ⚠️ {w}")
 
 
 # --------------------------------------------------------------------------- #
@@ -894,6 +1018,12 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
             "dedup_diagnostics", "scrape_success_diagnostics", "overlap_diagnostics",
             "rare_feature_diagnostics", "missingness_diagnostics", "outcome_definition",
             "anomaly_rows", "group_rows", "executive_summary", "warnings")}
+        audit = mc.get("confounder_audit") or {}
+        if audit.get("available"):
+            bundle["confounder_audit"] = {k: audit.get(k) for k in (
+                "registry", "feature_availability", "proxy_summary", "balance_by_cited",
+                "unmeasured_confounders", "warnings", "report_caveats")}
+            bundle["confounder_sensitivity_rows"] = mc.get("confounder_comparison_rows")
     if brand and brand.get("has_terms"):
         bundle["brand_visibility"] = {
             "summary": brand.get("summary"),
@@ -951,6 +1081,7 @@ def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = N
 
     _regression_section((an or {}).get("regression"), a)
     _sensitivity_section((an or {}).get("regression_comparison"), a)
+    _confounder_section((an or {}).get("regression_comparison"), a)
 
     corr = pd.DataFrame(an.get("correlation") or [])
     if not corr.empty:

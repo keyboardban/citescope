@@ -250,6 +250,40 @@ def sensitivity_block(mc) -> None:
         with st.expander("Feature group summary"):
             st.dataframe(grp, width="stretch", hide_index=True)
 
+    audit = mc.get("confounder_audit") or {}
+    if audit.get("available"):
+        st.markdown("**Confounder & proxy audit**")
+        st.caption(config.CAVEAT_CONFOUNDER_PROXY)
+        conf = pd.DataFrame(mc.get("confounder_comparison_rows") or [])
+        if not conf.empty:
+            with st.expander("Confounder-aware sensitivity (D → E → F → G → H) — focal Δ probability"):
+                piv = conf.pivot_table(index="feature", columns="model_name", values="delta_prob",
+                                       aggfunc="first").round(4)
+                st.dataframe(piv, width="stretch")
+                st.caption("Stable across D→H = robust to the measured proxies; shrinkage toward zero = part of "
+                           "the association was confounded. E–H are sensitivity models, not the headline.")
+        with st.expander("Proxy quality · cited-vs-more-only balance · unmeasured confounders"):
+            ps = pd.DataFrame(audit.get("proxy_summary") or [])
+            if not ps.empty:
+                st.markdown("**Proxy quality** (proxies are labelled — not the true construct)")
+                st.dataframe(ps[["confounder", "proxy_features", "proxy_quality", "requires_external_data"]],
+                             width="stretch", hide_index=True)
+            bal = pd.DataFrame(audit.get("balance_by_cited") or [])
+            if not bal.empty:
+                st.markdown("**Balance — cited vs more-only**")
+                st.dataframe(bal[["confounder_proxy", "cited_value", "more_only_value", "difference",
+                                  "missing_rate", "warning"]], width="stretch", hide_index=True)
+            cvif = pd.DataFrame(audit.get("confounder_vif") or [])
+            if not cvif.empty:
+                st.markdown("**Confounder-proxy VIF**")
+                st.dataframe(cvif, width="stretch", hide_index=True)
+            um = pd.DataFrame(audit.get("unmeasured_confounders") or [])
+            if not um.empty:
+                st.markdown("**Unmeasured confounders (external data required)**")
+                st.dataframe(um, width="stretch", hide_index=True)
+        for w in audit.get("warnings", []):
+            st.caption("⚠️ " + w)
+
     st.info(config.CAVEAT_BUSINESS_REC, icon="🧭")
 
 

@@ -1168,6 +1168,12 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
         work["relevance_score"] = ((Z - Z.mean()) / Z.std(ddof=0).replace(0, 1)).mean(axis=1)
         work["relevance_n_missing"] = Z.isna().sum(axis=1).astype(float)
 
+    # Confounder PROXY features (CiteScope-observed visibility, URL/prompt/language heuristics, grouped
+    # content/trust scores). Additive: they feed the confounder-aware sensitivity models E–H and the
+    # confounder audit, and do NOT alter the A/B/C/D focal/control pools. Defensive (missing → skipped).
+    from . import confounders as _conf
+    work, _conf_notes = _conf.derive_proxy_features(work)
+
     # Safer clustering: domain → prompt_id → record_id → repeated page key. Never a unique id
     # (degenerate) or a single run; warns below ~MIN_CLUSTERS.
     cluster_key, cluster_count, cluster_warning = choose_cluster(work, candidates=cluster_candidates)
@@ -1235,12 +1241,64 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
         warnings.append("Similarity/relevance features have severe VIF (>10) as a group — reduce them to a "
                         "single relevance score (Model D) rather than interpreting them separately.")
 
+    # ---- confounder-aware sensitivity models E–H (optional; never the headline) ----
+    # Same focal as Model D; each tier ADDS confounder-proxy CONTROLS (not focal) so we can see whether
+    # the content/focal estimates shrink once visibility / wording / language / completeness are adjusted for.
+    conf_focal = content + src_bool + rel
+    e_ctrl = [c for c in (_conf.PROMPT_WORDING_FEATURES + _conf.LANG_LOCAL_FEATURES) if c in work.columns]
+    f_ctrl = e_ctrl + [c for c in _conf.COMPLETENESS_FEATURES if c in work.columns]
+    g_ctrl = f_ctrl + [c for c in _conf.VISIBILITY_HISTORY_FEATURES if c in work.columns]
+    h_ctrl = g_ctrl + [c for c in _conf.META_ACCESS_FEATURES if c in work.columns]
+    confounder_models, _prev_ctrl = [], []
+    for title, ctrl, notes in [
+        ("E · + prompt wording + language/local", e_ctrl, "D + prompt-wording + language/local controls"),
+        ("F · + content completeness", f_ctrl, "E + content-completeness / answer-ready scores"),
+        ("G · + visibility history", g_ctrl, "F + CiteScope visibility-history proxies (observed, not true index history)"),
+        ("H · + metadata/access", h_ctrl, "G + metadata length / accessibility controls (if available)"),
+    ]:
+        if not ctrl or ctrl == _prev_ctrl:
+            continue
+        _prev_ctrl = ctrl
+        c_spec = build_spec(focal=conf_focal, position_col=position_col,
+                            position_fallbacks=list(position_fallbacks), controls=ctrl, categoricals=cats,
+                            cluster_key=cluster_key, phase_map=phase_map or {}, labels=labels,
+                            context=context, title=title, crosscheck_logit=False, wild_bootstrap=True)
+        confounder_models.append({"model_name": title, "spec_notes": notes, "controls_added": ctrl,
+                                  "fit": fit_citation_model(work, c_spec)})
+
+    model_d = next((m["fit"] for m in models if m["model_name"].startswith("D") and m["fit"].get("fitted")), None)
+    confounder_comparison_rows = []
+    _conf_panel = ([{"model_name": "D · baseline", "spec_notes": "baseline for shrinkage", "fit": model_d}]
+                   if model_d else []) + confounder_models
+    for m in _conf_panel:
+        f = m.get("fit")
+        if not f or not f.get("fitted"):
+            continue
+        for c in f["coefficients"]:
+            if not c.get("is_focal"):
+                continue
+            confounder_comparison_rows.append({
+                "feature": c["label"], "model_name": m["model_name"], "delta_prob": c["estimate"],
+                "se": c["se"], "ci_low": c["ci_low"], "ci_high": c["ci_high"], "p": c["p"],
+                "q_bh": c.get("p_adj"), "vif": c.get("vif"), "feature_group": _feature_group(c["name"]),
+                "spec_notes": m["spec_notes"],
+            })
+
+    audit = _conf.confounder_audit(work, labels=labels, derivation_notes=_conf_notes)
+    for w in audit.get("warnings", []):
+        if w not in warnings:
+            warnings.append(w)
+
     focal_numeric = [f for f in (content + rel) if f in work.columns]
     return {
         "available": True, "fitted": bool(diag.get("fitted")), "context": context,
         "cluster_variable": cluster_key, "cluster_count": cluster_count, "cluster_warning": cluster_warning,
         "models": models, "full_model": full, "diagnostic_model": diag,
         "model_b": model_b, "model_c": model_c,
+        "confounder_models": confounder_models,
+        "confounder_comparison_rows": confounder_comparison_rows,
+        "confounder_audit": audit,
+        "confounder_notes": _conf_notes,
         "comparison_rows": comparison_rows,
         "vif_rows": _vif_rows(diag),                       # full-matrix VIF (back-compat name)
         "vif_full_rows": _vif_rows(diag),
