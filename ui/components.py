@@ -284,6 +284,31 @@ def sensitivity_block(mc) -> None:
         for w in audit.get("warnings", []):
             st.caption("⚠️ " + w)
 
+    infr = pd.DataFrame(mc.get("inference_sensitivity_rows") or [])
+    if not infr.empty:
+        with st.expander("Inference sensitivity — SE by clustering choice (headline = analytic cluster SE)"):
+            st.dataframe(infr[["feature", "se_hc3", "se_cluster_domain", "se_cluster_prompt_id",
+                               "se_cluster_2way", "se_wild_bootstrap_sensitivity", "recommended_inference"]],
+                         width="stretch", hide_index=True)
+            st.caption("Point estimates are identical; only the SE differs. The wild bootstrap is a "
+                       "sensitivity value only — it does not overwrite the headline SE. `page_type` is "
+                       "never a cluster.")
+
+    strat = mc.get("page_type_stratified") or {}
+    summ = pd.DataFrame(strat.get("summary_rows") or [])
+    if not summ.empty:
+        st.markdown("**Page-type independent / stratified analysis** (heterogeneity / sensitivity)")
+        st.caption("One independent model per page_type. The row stays one surfaced source appearance; "
+                   "the data is restricted to one page_type at a time; page_type is not a dummy or a "
+                   "cluster inside a subgroup. Small subgroups are skipped or give unstable estimates.")
+        st.dataframe(summ, width="stretch", hide_index=True)
+        coefs = pd.DataFrame(strat.get("coefficient_rows") or [])
+        if not coefs.empty:
+            with st.expander("Within-page-type feature associations (Δ probability)"):
+                piv = coefs.pivot_table(index="feature", columns="page_type", values="estimate",
+                                        aggfunc="first").round(4)
+                st.dataframe(piv, width="stretch")
+
     st.info(config.CAVEAT_BUSINESS_REC, icon="🧭")
 
 

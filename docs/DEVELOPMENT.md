@@ -500,6 +500,33 @@ caveats for what cannot be measured. New module `src/confounders.py` (no Streaml
   E–H optional-not-headline, exporters, safe wording, pipeline integration). Verified end-to-end on the
   real 1,270-source audit (E–H all fit; full audit renders in report + JSON; no banned wording).
 
+### Iteration M — Page-type stratified analysis + inference safeguards (branch `econometrics-layer`)
+
+- **Inference rule change (the fix flagged in the calc audit).** The unrestricted **wild cluster
+  bootstrap no longer overwrites the headline SE**. `fit_citation_model` keeps the **analytic HC3 /
+  cluster SE as the headline**, always emits a few-cluster warning below 40 clusters, and reports each
+  focal coefficient's bootstrap SE as a **sensitivity value only** (`se_wild_bootstrap`) plus a
+  `recommended_inference`. This makes few-cluster inference honest (the old path was anti-conservative).
+- **`page_type_stratified_analysis`** — one **independent LPM per major `page_type`** (heterogeneity /
+  sensitivity). The row stays one **surfaced source appearance**; the data is restricted to one page_type
+  at a time; `page_type` is **never a dummy** (constant within the subgroup) and **never a cluster**.
+  Gates `min_n=50` / `min_cited=10` / `min_more_only=10` — failing subgroups are skipped with a diagnostic
+  row. Prefers clustering by domain / prompt_id, falling back to HC3 (with a warning). Emits
+  `econometrics_page_type_stratified_{summary,coefficients,warnings}.csv`.
+- **`inference_sensitivity`** — for each focal feature, the SE under **HC3 / cluster(domain) /
+  cluster(prompt_id) / two-way domain×prompt_id / wild-bootstrap-sensitivity** + a `recommended_inference`
+  (two-way when both margins are non-degenerate; else domain-only / prompt-only with a warning). `page_type`
+  is never a cluster. Emits `econometrics_inference_sensitivity.csv`.
+- **Wiring** — both flow through `model_comparison` → `report._stratified_section` + the JSON bundle +
+  `components.sensitivity_block` render + 4 ChatGPT Report-tab download buttons. `config.py` gains
+  `PAGE_TYPE_MIN_*`. `docs/econometrics_human_decision_guide.md` updated (§4.1 stratified section, §4.2
+  source_position = observed-output source-panel placement, §4.3 mediator estimand wording, §4.4
+  leave-one-out `domain_citation_rate`, §4.5 two-way fallback rule, §4.6 heading/word_count = controls,
+  §4.7 new decision row).
+- **`pytest -q` → 92 passed** — rewrote the wild-bootstrap test to assert sensitivity-only behavior; +4
+  new (stratified per-group / skip-small / inference-sensitivity / decision-guide wording). Verified
+  end-to-end on the real 1,270-source audit.
+
 ---
 
 ## 5. Testing & verification (current)

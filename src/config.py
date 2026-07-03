@@ -197,6 +197,11 @@ ECON_SE_DEFAULT = "HC3"  # heteroskedasticity-robust (0/1 outcome is always hete
 ECON_BOOTSTRAP_ITERS = 1999
 ECON_RNG_SEED = 12345    # match batch.py for determinism
 ECON_MIN_ROWS = 20       # refuse to fit below this many usable rows
+# Page-type stratified analysis: minimum subgroup requirements before fitting a per-page_type model.
+PAGE_TYPE_MIN_N = 50
+PAGE_TYPE_MIN_CITED = 10
+PAGE_TYPE_MIN_MORE_ONLY = 10
+PAGE_TYPE_MAX_GROUPS = 8
 
 # This layer is a SCOPED exception to the app's "observable patterns only" rule:
 # it reports position-adjusted regression coefficients that may be read as cautious

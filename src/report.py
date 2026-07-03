@@ -375,6 +375,75 @@ def econometrics_unmeasured_confounders_md(mc: dict) -> str:
     return "\n".join(L) + "\n"
 
 
+# --------------------------------------------------------------------------- #
+# page-type stratified analysis + inference-sensitivity exports
+# --------------------------------------------------------------------------- #
+def _strat(mc: dict) -> dict:
+    return (mc or {}).get("page_type_stratified") or {}
+
+
+def econometrics_page_type_stratified_summary_csv(mc: dict) -> str:
+    return _rows_csv(_strat(mc).get("summary_rows"), "no page_type subgroups (need a page_type column)\n")
+
+
+def econometrics_page_type_stratified_coefficients_csv(mc: dict) -> str:
+    return _rows_csv(_strat(mc).get("coefficient_rows"), "no page_type stratified coefficients\n")
+
+
+def econometrics_page_type_stratified_warnings_csv(mc: dict) -> str:
+    return _rows_csv(_strat(mc).get("warning_rows"), "no page_type stratified warnings\n")
+
+
+def econometrics_inference_sensitivity_csv(mc: dict) -> str:
+    return _rows_csv((mc or {}).get("inference_sensitivity_rows"), "no inference-sensitivity table\n")
+
+
+def _stratified_section(mc: dict, a) -> None:
+    """Render the page-type independent / stratified analysis + the inference-sensitivity table."""
+    strat = (mc or {}).get("page_type_stratified") or {}
+    infr = (mc or {}).get("inference_sensitivity_rows") or []
+    if not strat.get("available") and not infr:
+        return
+
+    inf = pd.DataFrame(infr)
+    if not inf.empty:
+        a("## Inference sensitivity (standard-error choice)\n")
+        a("_The point estimates are identical; only the **standard errors** differ by clustering choice. "
+          "The **analytic cluster SE is the headline**; the wild cluster bootstrap is a **sensitivity value "
+          "only** (it is anti-conservative in few-cluster settings and never overwrites the headline). "
+          "`page_type` is a control/stratifier, never a cluster._\n")
+        a(_md_table(inf[["feature", "se_hc3", "se_cluster_domain", "se_cluster_prompt_id", "se_cluster_2way",
+                         "se_wild_bootstrap_sensitivity", "recommended_inference", "warning"]]))
+
+    summ = pd.DataFrame(strat.get("summary_rows") or [])
+    if summ.empty:
+        return
+    a("## Page-type independent / stratified analysis\n")
+    a("_One **independent** citation model is fit **within each major `page_type`** (the row stays one "
+      "surfaced source appearance; the data is restricted to one page_type at a time). `page_type` is "
+      "**not** a dummy inside a subgroup (it is constant there) and is **never** a cluster. Treat these as "
+      "**heterogeneity / sensitivity** analysis — small subgroups give unstable estimates — not as the "
+      "headline and not as causal effects._\n")
+    a(_md_table(summ[["page_type", "n", "cited_n", "more_only_n", "cited_rate", "model_status",
+                      "skipped_reason", "cluster_method_used", "cluster_count_domain",
+                      "cluster_count_prompt_id"]]))
+
+    coefs = pd.DataFrame(strat.get("coefficient_rows") or [])
+    if not coefs.empty:
+        a("### Within-page-type feature associations (Δ probability)\n")
+        a("_Read as: within this page type, which features are **associated with** citation probability "
+          "among surfaced sources. Full per-subgroup SE/CI/p/q in "
+          "`econometrics_page_type_stratified_coefficients.csv`._\n")
+        piv = coefs.pivot_table(index="feature", columns="page_type", values="estimate", aggfunc="first")
+        a(_md_table(piv.reset_index().round(4)))
+
+    warns = strat.get("warning_rows") or []
+    if warns:
+        a("_Skipped / warned subgroups:_")
+        for w in warns:
+            a(f"> ⚠️ **{w.get('page_type')}** — {w.get('warning')}")
+
+
 def forest_png(fit: dict, *, exclude_groups=(), title: str | None = None, focal_only: bool = True) -> bytes | None:
     """Static matplotlib forest plot (Δ probability ± 95% CI) as PNG bytes. Returns None
     if matplotlib is unavailable or there are no plottable coefficients."""
@@ -1017,7 +1086,8 @@ def chatgpt_analysis_json(run: dict, an: dict, features: list[dict] | None = Non
             "multiple_testing_summary", "logit_ame_check", "separation_diagnostics",
             "dedup_diagnostics", "scrape_success_diagnostics", "overlap_diagnostics",
             "rare_feature_diagnostics", "missingness_diagnostics", "outcome_definition",
-            "anomaly_rows", "group_rows", "executive_summary", "warnings")}
+            "anomaly_rows", "group_rows", "executive_summary", "warnings",
+            "page_type_stratified", "inference_sensitivity_rows")}
         audit = mc.get("confounder_audit") or {}
         if audit.get("available"):
             bundle["confounder_audit"] = {k: audit.get(k) for k in (
@@ -1082,6 +1152,7 @@ def chatgpt_markdown_report(run: dict, an: dict, features: list[dict] | None = N
     _regression_section((an or {}).get("regression"), a)
     _sensitivity_section((an or {}).get("regression_comparison"), a)
     _confounder_section((an or {}).get("regression_comparison"), a)
+    _stratified_section((an or {}).get("regression_comparison"), a)
 
     corr = pd.DataFrame(an.get("correlation") or [])
     if not corr.empty:

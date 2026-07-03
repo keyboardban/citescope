@@ -794,6 +794,23 @@ def _tab_report(ss) -> None:
                                f"{rid}_econometrics_unmeasured_confounders.md", "text/markdown",
                                width="stretch", key="conf_unmeasured_md")
 
+        if (mc.get("page_type_stratified") or {}).get("summary_rows") or mc.get("inference_sensitivity_rows"):
+            st.markdown("**Page-type stratified + inference-sensitivity exports**")
+            _strat_exports = [
+                ("econometrics_page_type_stratified_summary.csv",
+                 report.econometrics_page_type_stratified_summary_csv(mc)),
+                ("econometrics_page_type_stratified_coefficients.csv",
+                 report.econometrics_page_type_stratified_coefficients_csv(mc)),
+                ("econometrics_page_type_stratified_warnings.csv",
+                 report.econometrics_page_type_stratified_warnings_csv(mc)),
+                ("econometrics_inference_sensitivity.csv",
+                 report.econometrics_inference_sensitivity_csv(mc)),
+            ]
+            sk = st.columns(2)
+            for i, (fn, data) in enumerate(_strat_exports):
+                sk[i % 2].download_button(f"⬇️ {fn}", data, f"{rid}_{fn}", "text/csv",
+                                          width="stretch", key=f"strat_{fn}")
+
     if st.button("💾 Save run snapshot to data/chatgpt/"):
         path = storage.save_chatgpt_run(run)
         st.success(f"Saved: {path}")

@@ -469,21 +469,19 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
     ci = np.asarray(res.conf_int(), dtype=float)  # (k, 2)
     focal_set = set(dm["focal_cols"])
 
-    # Few clusters → analytic cluster SE is anti-conservative. Replace the FOCAL
-    # coefficients' SE / CI / p with a wild cluster bootstrap.
-    wild_applied = False
+    # Headline SE is the ANALYTIC HC3 / cluster SE — it is never overwritten. With few clusters the
+    # unrestricted wild cluster bootstrap is computed as a SENSITIVITY value only (it is
+    # anti-conservative here — it reproduces the uncorrected cluster variance with a normal 1.96 — so
+    # it must not be the headline). A restricted wild bootstrap-t would be the proper few-cluster
+    # fallback (not yet implemented). See `se_wild_bootstrap` on each focal coefficient.
+    wild_se_by_name: dict[str, float | None] = {}
     if few_clusters and use_cluster and spec.get("wild_bootstrap", True):
         gi = pd.factorize(groups.values)[0]
         b_se = _wild_cluster_bootstrap_se(X.values, y.values, params, gi, int(gi.max()) + 1,
                                           config.ECON_BOOTSTRAP_ITERS, config.ECON_RNG_SEED)
         for i, nm in enumerate(names):
             if nm in focal_set and np.isfinite(b_se[i]) and b_se[i] > 0:
-                bse[i] = b_se[i]
-                tvals[i] = params[i] / b_se[i]
-                pvals[i] = _two_sided_p(tvals[i])
-                ci[i, 0], ci[i, 1] = params[i] - 1.96 * b_se[i], params[i] + 1.96 * b_se[i]
-        wild_applied = True
-        se_type = "cluster + wild bootstrap (focal)"
+                wild_se_by_name[nm] = _f(b_se[i])
 
     vif = _vif_map(X)
 
@@ -535,6 +533,7 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
             "phase": phase_map.get(base, "pre_answer"),
             "estimate": _f(params[i]),
             "se": _f(bse[i]),
+            "se_wild_bootstrap": wild_se_by_name.get(nm),   # few-cluster SENSITIVITY only (not headline)
             "ci_low": _f(ci[i][0]),
             "ci_high": _f(ci[i][1]),
             "t": _f(tvals[i]),
@@ -548,11 +547,11 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
         })
 
     max_vif = max([c["vif"] for c in coefficients if c["vif"] is not None] or [None]) if coefficients else None
-    if few_clusters and not wild_applied:
+    if few_clusters:
         warnings.append(config.CAVEAT_FEW_CLUSTERS)
-    elif wild_applied:
-        warnings.append("Few clusters (prompts): focal p-values & CIs use the **wild cluster bootstrap** "
-                        "(more honest than the analytic cluster SE here).")
+        if wild_se_by_name:
+            warnings.append("A wild cluster bootstrap SE is reported as a **sensitivity** value only "
+                            "(`se_wild_bootstrap`); the analytic cluster SE remains the headline.")
     if max_vif is not None and max_vif >= config.VIF_PROBLEM:
         warnings.append(f"High multicollinearity (max VIF={max_vif:.1f}); entangled features have "
                         "wide error bars — not bias. Consider reporting them jointly.")
@@ -590,6 +589,7 @@ def fit_citation_model(df: pd.DataFrame, spec: dict) -> dict:
         "n_clusters": n_clusters,
         "cluster_key": spec["cluster_key"] if use_cluster else None,
         "se_type": se_type,
+        "recommended_inference": (f"cluster({spec['cluster_key']})" if use_cluster else config.ECON_SE_DEFAULT),
         "r2": _f(res.rsquared),
         "adj_r2": _f(res.rsquared_adj),
         "position_spec": (f"{spec['position_spec']}({diagnostics.get('position_col')})"
@@ -855,7 +855,8 @@ def _exec_summary(diag: dict, models: list[dict], cluster_var, cluster_count) ->
     if cluster_count is not None:
         note = f"Standard errors clustered by **{cluster_var}** ({cluster_count} clusters)."
         if cluster_count < config.MIN_CLUSTERS:
-            note += " Few clusters — focal CIs use the wild cluster bootstrap; treat significance cautiously."
+            note += (" Few clusters (<40) — the analytic cluster SE is the headline; a wild cluster "
+                     "bootstrap SE is reported as a sensitivity value only; treat significance cautiously.")
         out.append(note)
     return out
 
@@ -1212,6 +1213,7 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
     diag = full if full.get("fitted") else next((m["fit"] for m in reversed(models) if m["fit"].get("fitted")), full)
     model_c = next((m["fit"] for m in models if m["model_name"].startswith("C") and m["fit"].get("fitted")), diag)
     model_b = next((m["fit"] for m in models if m["model_name"].startswith("B") and m["fit"].get("fitted")), None)
+    model_c_spec = specs[2][2] if len(specs) > 2 else (specs[-1][2] if specs else None)
 
     comparison_rows = []
     for m in models:
@@ -1299,6 +1301,10 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
         "confounder_comparison_rows": confounder_comparison_rows,
         "confounder_audit": audit,
         "confounder_notes": _conf_notes,
+        "page_type_stratified": page_type_stratified_analysis(
+            work, context=context, labels=labels, phase_map=phase_map,
+            position_col=position_col, position_fallbacks=position_fallbacks),
+        "inference_sensitivity_rows": (inference_sensitivity(work, model_c_spec) if model_c_spec else []),
         "comparison_rows": comparison_rows,
         "vif_rows": _vif_rows(diag),                       # full-matrix VIF (back-compat name)
         "vif_full_rows": _vif_rows(diag),
@@ -1318,3 +1324,192 @@ def model_comparison(df: pd.DataFrame, *, context: str = "", position_col: str =
         "executive_summary": _exec_summary(diag, models, cluster_key, cluster_count),
         "warnings": warnings,
     }
+
+
+# --------------------------------------------------------------------------- #
+# inference-sensitivity table (SE under HC3 / domain / prompt_id / two-way / wild bootstrap)
+# --------------------------------------------------------------------------- #
+def inference_sensitivity(df: pd.DataFrame, spec: dict, *, domain_col: str = "domain",
+                          prompt_col: str = "prompt_id", prompt_fallback: str = "record_id") -> list[dict]:
+    """For each FOCAL feature, report the standard error under several inference choices — HC3,
+    cluster(domain), cluster(prompt_id), two-way cluster(domain × prompt_id), and the wild cluster
+    bootstrap (sensitivity only) — plus a `recommended_inference`. Point estimates are identical
+    across choices; only the SEs differ. Diagnostic only. Never clusters on page_type."""
+    if not HAVE_STATSMODELS or df is None or df.empty:
+        return []
+    s = dict(spec)
+    s["cluster_key"] = None                     # neutral design; clustering applied per-method below
+    dm = design_matrix(df, s)
+    if "error" in dm:
+        return []
+    X, y = dm["X"], dm["y"]
+    if len(X) < max(config.ECON_MIN_ROWS, X.shape[1] + 5):
+        return []
+    names = list(X.columns)
+    focal = set(dm["focal_cols"])
+    base = df.loc[X.index]
+    labels = spec.get("labels", {})
+
+    def _groups(col):
+        if col and col in base.columns:
+            g = base[col].astype("string").fillna("∅")
+            nun = int(g.nunique())
+            if 2 <= nun < len(g):               # non-degenerate: ≥2 clusters, not one-per-row
+                return g, nun
+        return None, None
+
+    dom, n_dom = _groups(domain_col)
+    pr, n_pr = _groups(prompt_col)
+    if pr is None:
+        pr, n_pr = _groups(prompt_fallback)
+
+    model = sm.OLS(y.values, X.values, hasconst=True)
+
+    def _se(cov_type, **kw):
+        try:
+            with np.errstate(invalid="ignore", divide="ignore"):  # singular cov → NaN SE (→ None), not a crash
+                return np.asarray(model.fit(cov_type=cov_type, **kw).bse, dtype=float)
+        except Exception:  # noqa: BLE001
+            return None
+
+    se_hc3 = _se("HC3")
+    se_dom = _se("cluster", cov_kwds={"groups": dom.values}) if dom is not None else None
+    se_pr = _se("cluster", cov_kwds={"groups": pr.values}) if pr is not None else None
+    se_2w = None
+    if dom is not None and pr is not None:      # two-way cluster (domain × prompt_id)
+        g2 = np.column_stack([pd.factorize(dom.values)[0], pd.factorize(pr.values)[0]])
+        se_2w = _se("cluster", cov_kwds={"groups": g2})
+    wild = None                                 # sensitivity only, on the preferred single cluster
+    pref = dom if dom is not None else pr
+    if pref is not None:
+        params = np.asarray(model.fit().params, dtype=float)
+        gi = pd.factorize(pref.values)[0]
+        wild = _wild_cluster_bootstrap_se(X.values, y.values, params, gi, int(gi.max()) + 1,
+                                          config.ECON_BOOTSTRAP_ITERS, config.ECON_RNG_SEED)
+
+    if (n_dom or 0) >= 2 and (n_pr or 0) >= 2 and se_2w is not None:
+        rec, rec_n = "cluster(domain × prompt_id)", min(n_dom, n_pr)
+    elif (n_dom or 0) >= 2:
+        rec, rec_n = "cluster(domain)", n_dom
+    elif (n_pr or 0) >= 2:
+        rec, rec_n = "cluster(prompt_id)", n_pr
+    else:
+        rec, rec_n = "HC3", None
+    warn = (config.CAVEAT_FEW_CLUSTERS if (rec.startswith("cluster") and rec_n is not None
+            and rec_n < config.MIN_CLUSTERS) else "")
+
+    rows = []
+    for i, nm in enumerate(names):
+        if nm not in focal:
+            continue
+        lbl = labels.get(_base_feature(nm), _base_feature(nm).replace("_", " ")) + (
+            f" = {nm.split('=', 1)[1]}" if "=" in nm else "")
+        rows.append({
+            "feature": lbl,
+            "se_hc3": _f(se_hc3[i]) if se_hc3 is not None else None,
+            "se_cluster_domain": _f(se_dom[i]) if se_dom is not None else None,
+            "se_cluster_prompt_id": _f(se_pr[i]) if se_pr is not None else None,
+            "se_cluster_2way": _f(se_2w[i]) if se_2w is not None else None,
+            "se_wild_bootstrap_sensitivity": _f(wild[i]) if wild is not None else None,
+            "recommended_inference": rec,
+            "cluster_count_domain": n_dom, "cluster_count_prompt_id": n_pr,
+            "warning": warn,
+        })
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# page-type independent / stratified analysis (one INDEPENDENT regression per page_type)
+# --------------------------------------------------------------------------- #
+def page_type_stratified_analysis(df: pd.DataFrame, *, context: str = "", labels: dict | None = None,
+                                  phase_map: dict | None = None, position_col: str = "source_position",
+                                  position_fallbacks=("observed_rank",), page_type_col: str = "page_type",
+                                  min_n: int | None = None, min_cited: int | None = None,
+                                  min_more_only: int | None = None, max_groups: int | None = None) -> dict:
+    """Fit ONE independent LPM per major page_type (heterogeneity / sensitivity analysis). The row
+    stays one **surfaced source appearance**; the data is restricted to one page_type at a time.
+    `page_type` is NEVER a dummy here (constant within the subgroup) and NEVER a cluster. Subgroups
+    failing min-n / min-cited / min-more-only are skipped with a diagnostic row. Prefers clustering
+    by domain / prompt_id, falling back to HC3 (with a warning) when no valid cluster exists.
+    Returns {available, summary_rows, coefficient_rows, warning_rows}."""
+    labels = {**_DEFAULT_LABELS, **(labels or {})}
+    min_n = config.PAGE_TYPE_MIN_N if min_n is None else min_n
+    min_cited = config.PAGE_TYPE_MIN_CITED if min_cited is None else min_cited
+    min_more_only = config.PAGE_TYPE_MIN_MORE_ONLY if min_more_only is None else min_more_only
+    max_groups = config.PAGE_TYPE_MAX_GROUPS if max_groups is None else max_groups
+
+    empty = {"available": HAVE_STATSMODELS, "summary_rows": [], "coefficient_rows": [], "warning_rows": []}
+    if not HAVE_STATSMODELS or df is None or df.empty or "cited" not in df.columns:
+        return empty
+    if page_type_col not in df.columns:
+        empty["warning_rows"] = [{"page_type": "(none)",
+                                  "warning": f"no `{page_type_col}` column — stratified analysis skipped."}]
+        return empty
+
+    work = df.copy()
+    content = [c for c in _CONTENT_FEATURES if c in work.columns]
+    src_bool = [c for c in _SOURCE_BOOL if c in work.columns]
+    rel = ["relevance_score"] if "relevance_score" in work.columns else []
+    focal = content + src_bool + rel
+    cats = [c for c in ("source_type", "intent") if c in work.columns]   # page_type intentionally EXCLUDED
+    prompt_col = "prompt_id" if "prompt_id" in work.columns else "record_id"
+
+    levels = work[page_type_col].astype("string").fillna("unknown").value_counts()
+    summary, coeffs, warns = [], [], []
+    for lvl in list(levels.index)[:max_groups]:
+        sub = work[work[page_type_col].astype("string").fillna("unknown") == lvl]
+        n = len(sub)
+        ysub = pd.to_numeric(sub["cited"], errors="coerce")
+        cited_n, more_n = int((ysub == 1).sum()), int((ysub == 0).sum())
+        cited_rate = round(cited_n / n, 4) if n else 0.0
+        n_dom = int(sub["domain"].astype("string").nunique()) if "domain" in sub.columns else None
+        n_pr = int(sub[prompt_col].astype("string").nunique()) if prompt_col in sub.columns else None
+
+        def _summary(status, reason, method="", warn=""):
+            return {"page_type": str(lvl), "n": n, "cited_n": cited_n, "more_only_n": more_n,
+                    "cited_rate": cited_rate, "model_status": status, "skipped_reason": reason,
+                    "cluster_method_used": method, "cluster_count_domain": n_dom,
+                    "cluster_count_prompt_id": n_pr, "warning": warn}
+
+        reasons = []
+        if n < min_n:
+            reasons.append(f"n={n}<{min_n}")
+        if cited_n < min_cited:
+            reasons.append(f"cited={cited_n}<{min_cited}")
+        if more_n < min_more_only:
+            reasons.append(f"more_only={more_n}<{min_more_only}")
+        if reasons:
+            reason = "insufficient subgroup: " + ", ".join(reasons)
+            summary.append(_summary("skipped", reason, warn=reason))
+            warns.append({"page_type": str(lvl), "warning": reason})
+            continue
+
+        ckey, ccount, cwarn = choose_cluster(sub, candidates=("domain", prompt_col, "record_id"))
+        method = f"cluster({ckey})" if ckey else "HC3 (no valid cluster in subgroup)"
+        if not ckey:
+            warns.append({"page_type": str(lvl), "warning": "no valid cluster in subgroup — fell back to HC3."})
+        spec = build_spec(focal=focal, position_col=position_col,
+                          position_fallbacks=list(position_fallbacks), categoricals=cats, cluster_key=ckey,
+                          phase_map=phase_map or {}, labels=labels, context=context,
+                          title=f"page_type={lvl}", crosscheck_logit=False, wild_bootstrap=True)
+        fit = fit_citation_model(sub, spec)
+        if not fit.get("fitted"):
+            reason = (fit.get("warnings") or ["not fitted"])[0]
+            summary.append(_summary("not_fitted", reason, method))
+            warns.append({"page_type": str(lvl), "warning": reason})
+            continue
+
+        subwarn = "; ".join(w for w in (cwarn,
+                            (config.CAVEAT_FEW_CLUSTERS if fit["diagnostics"].get("few_clusters") else "")) if w)
+        summary.append(_summary("fitted", "", method, subwarn))
+        for c in fit["coefficients"]:
+            if not c.get("is_focal"):
+                continue
+            coeffs.append({
+                "page_type": str(lvl), "model_name": f"page_type={lvl}", "feature": c["label"],
+                "estimate": c["estimate"], "se": c["se"], "ci_low": c["ci_low"], "ci_high": c["ci_high"],
+                "p": c["p"], "q_bh": c.get("p_adj"), "inference_method": fit["se_type"],
+                "n": n, "cited_n": cited_n, "more_only_n": more_n, "warning": subwarn,
+            })
+
+    return {"available": True, "summary_rows": summary, "coefficient_rows": coeffs, "warning_rows": warns}

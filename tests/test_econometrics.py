@@ -214,23 +214,24 @@ def test_separation_flagged_lpm_fallback():
 
 
 # --------------------------------------------------------------------------- #
-# 14. wild cluster bootstrap kicks in with few clusters and is no less honest
-#     than the (anti-conservative) analytic cluster SE under a clustered null
+# 14. wild cluster bootstrap is SENSITIVITY-ONLY: with few clusters the headline SE stays the
+#     analytic cluster SE (never overwritten), a few-cluster warning fires, and the bootstrap SE
+#     is reported separately as `se_wild_bootstrap`.
 # --------------------------------------------------------------------------- #
-def test_wild_bootstrap_with_few_clusters():
-    res = E.fit_citation_model(
-        _sim(n=240, clusters=8, cluster_shock=0.30, seed=1), _spec(cluster_key="record_id", logit=False))
-    assert res["diagnostics"]["few_clusters"] and "wild" in res["se_type"]
+def test_wild_bootstrap_is_sensitivity_only():
+    df = _sim(n=240, clusters=8, cluster_shock=0.30, seed=1)
+    res = E.fit_citation_model(df, _spec(cluster_key="record_id", logit=False))
+    assert res["diagnostics"]["few_clusters"]
+    assert res["se_type"] == "cluster" and "wild" not in res["se_type"]      # headline is analytic
+    assert any("few clusters" in w.lower() or "cluster-robust se may be unstable" in w.lower()
+               for w in res["warnings"])                                     # few-cluster warning present
+    x1 = _coef(res, "x1")
+    assert x1["se_wild_bootstrap"] is not None                              # sensitivity SE reported
 
-    rej_analytic = rej_wild = 0
-    M = 40
-    for s in range(M):                                   # NULL focal effect, strong within-cluster corr
-        df = _sim(n=240, b_x=0.0, clusters=8, cluster_shock=0.30, seed=300 + s)
-        ca = _coef(E.fit_citation_model(df, _spec(cluster_key="record_id", wild=False, logit=False)), "x1")
-        cw = _coef(E.fit_citation_model(df, _spec(cluster_key="record_id", wild=True, logit=False)), "x1")
-        rej_analytic += bool(ca["p"] is not None and ca["p"] < 0.05)
-        rej_wild += bool(cw["p"] is not None and cw["p"] < 0.05)
-    assert rej_wild <= rej_analytic                      # bootstrap never rejects the null more often
+    # the headline SE/p must NOT depend on the wild flag (bootstrap never overwrites the headline)
+    off = _coef(E.fit_citation_model(df, _spec(cluster_key="record_id", wild=False, logit=False)), "x1")
+    assert abs(x1["se"] - off["se"]) < 1e-9 and x1["p"] == off["p"]
+    assert off["se_wild_bootstrap"] is None                                 # wild=False → no sensitivity SE
 
 
 # --------------------------------------------------------------------------- #
@@ -535,3 +536,88 @@ def test_choose_cluster_is_safe():
     # single run_id is never chosen (only one cluster)
     df2 = pd.DataFrame({"cited": [0, 1] * 30, "run_id": ["only"] * 60})
     assert E.choose_cluster(df2) == (None, None, "")
+
+
+# =========================================================================== #
+# Iteration M — page-type stratified analysis + inference safeguards
+# =========================================================================== #
+def _pt_df(seed=0, n_prompts=60, per=10):
+    """Rich source frame with a page_type column and enough rows per major page_type."""
+    rng = np.random.default_rng(seed)
+    doms = [f"d{i}.co.th" for i in range(30)]
+    rows = []
+    for r in range(n_prompts):
+        for j in range(per):
+            d = str(rng.choice(doms)); pos = int(rng.integers(1, 21))
+            faq, contact, sim = int(rng.random() < .4), int(rng.random() < .4), rng.random()
+            pt = str(rng.choice(["article", "product_page", "contact_page", "unknown"], p=[.4, .3, .2, .1]))
+            p = 0.30 + 0.12 * faq - 0.06 * contact + 0.20 * sim - 0.10 * np.log1p(pos)
+            rows.append(dict(
+                record_id=f"p{r}", prompt_id=f"p{r}", domain=d, url=f"https://{d}/{j}",
+                normalized_url=f"https://{d}/{j}", cited=int(rng.random() < min(.97, max(.03, p))),
+                source_position=pos, observed_rank=pos, page_type=pt, has_faq=faq, has_contact_info=contact,
+                has_location_info=int(rng.random() < .3), has_table=int(rng.random() < .3),
+                has_bullets=int(rng.random() < .5), has_author=int(rng.random() < .3),
+                has_reviewer=int(rng.random() < .2), freshness_days=float(rng.integers(0, 900)),
+                word_count=int(rng.integers(100, 3000)), heading_count=int(rng.integers(0, 12)),
+                source_type=str(rng.choice(["news", "forum", "review"])),
+                intent=str(rng.choice(["Buy", "Compare", "Info"])),
+                title_prompt_similarity=sim * .9 + rng.normal(0, .03),
+                description_prompt_similarity=sim * .8 + rng.normal(0, .03),
+                page_prompt_similarity=sim + rng.normal(0, .03),
+                max_chunk_prompt_similarity=sim + .05 + rng.normal(0, .02)))
+    return pd.DataFrame(rows)
+
+
+# 32. one INDEPENDENT model per page_type; no page_type dummy inside; page_type never a cluster
+def test_page_type_stratified_runs_per_group():
+    strat = E.page_type_stratified_analysis(_pt_df(seed=1), context="chatgpt")
+    assert strat["available"] and strat["summary_rows"]
+    assert any(s["model_status"] == "fitted" for s in strat["summary_rows"])   # at least one fits
+    assert not any("page_type" in c["feature"].lower() for c in strat["coefficient_rows"])
+    assert not any("page_type" in (s.get("cluster_method_used") or "").lower() for s in strat["summary_rows"])
+    for s in strat["summary_rows"]:
+        assert {"n", "cited_n", "more_only_n", "cited_rate", "model_status"} <= set(s)
+    json.dumps(strat)
+
+
+# 33. subgroups below min_n / min_cited / min_more_only are SKIPPED with a diagnostic reason
+def test_page_type_stratified_skips_small_subgroups():
+    rows = []
+    for j in range(4):                                        # tiny article group -> skip
+        rows.append(dict(record_id=f"a{j}", prompt_id=f"a{j}", domain=f"x{j}.com", cited=j % 2,
+                         source_position=1, page_type="article", has_faq=1, has_contact_info=0,
+                         source_type="news", title_prompt_similarity=0.5))
+    for j in range(140):                                     # big product group -> fits
+        rows.append(dict(record_id=f"p{j % 20}", prompt_id=f"p{j % 20}", domain=f"d{j % 18}.com",
+                         cited=int(j % 3 == 0), source_position=int(1 + j % 10), page_type="product_page",
+                         has_faq=int(j % 2), has_contact_info=int(j % 3 == 0),
+                         source_type=str(["news", "forum"][j % 2]), title_prompt_similarity=0.3 + 0.3 * (j % 2)))
+    strat = E.page_type_stratified_analysis(pd.DataFrame(rows), context="chatgpt",
+                                            min_n=50, min_cited=10, min_more_only=10)
+    by = {s["page_type"]: s for s in strat["summary_rows"]}
+    assert by["article"]["model_status"] == "skipped" and by["article"]["skipped_reason"]
+    assert any(w["page_type"] == "article" for w in strat["warning_rows"])
+
+
+# 34. inference-sensitivity table: SE per clustering choice incl. two-way; never clusters page_type
+def test_inference_sensitivity_table():
+    mc = E.model_comparison(_pt_df(seed=3), context="chatgpt")
+    rows = mc["inference_sensitivity_rows"]
+    assert rows and all(
+        {"se_hc3", "se_cluster_domain", "se_cluster_prompt_id", "se_cluster_2way",
+         "se_wild_bootstrap_sensitivity", "recommended_inference"} <= set(r) for r in rows)
+    assert any(r["se_cluster_2way"] is not None for r in rows)          # two-way computed when valid
+    assert all("page_type" not in (r["recommended_inference"] or "").lower() for r in rows)
+
+
+# 35. the human-decision guide keeps safe wording (source_position placement + proxy labels)
+def test_decision_guide_safe_wording():
+    import pathlib
+    guide = pathlib.Path(__file__).resolve().parent.parent / "docs" / "econometrics_human_decision_guide.md"
+    clean = guide.read_text(encoding="utf-8").lower().replace("*", "")
+    assert "observable source panel placement" in clean                # section 4.2
+    assert "not an internal retrieval rank" in clean                   # not internal rank
+    assert "not true domain authority" in clean                       # proxy, not true authority
+    assert "not true index history" in clean                          # proxy, not true index history
+    assert "page-type independent" in clean and "heterogeneity" in clean
