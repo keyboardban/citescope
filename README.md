@@ -1,217 +1,144 @@
-# 🔎 AI Search Citation Audit
+# CiteScope ChatGPT Content Audit
 
-A Streamlit research dashboard that audits **how AI Search systems cite websites**.
-It sends a prompt to **Gemini with Google Search Grounding**, captures the
-observable trace (answer, search queries, citations, grounding metadata),
-independently **reconstructs the SERP** for those queries via **Apify**, scrapes
-the candidate pages, matches citations to candidates, and compares
-**cited websites** against **non-cited reconstructed SERP candidates**.
+CiteScope is a Streamlit research application for auditing observable ChatGPT
+sources exported through Bright Data. It compares sources marked as cited with
+sources shown but not cited (more-only), validates scraped page content, and
+estimates content-feature associations using the econometric notebooks 07-11.
 
-> **This is a black-box observational audit.** We only observe what the Gemini API
-> exposes. The Apify SERP is a *reconstructed candidate set*, **not** the exact
-> internal results the AI used. We measure *observable patterns* associated with
-> citations — we do **not** claim to reveal the AI's true retrieval or citation
-> mechanism. A non-cited candidate was **not** "rejected"; similarity is a
-> *semantic overlap proxy*, not proof of use.
+This is a black-box observational audit. More-only does not mean rejected, and
+the observed Bright Data source panel is not ChatGPT's complete internal
+retrieval set. Model estimates are conditional associations among surfaced
+sources, not causal effects or web-wide citation probabilities.
 
----
+## Application modes
 
-## 1. What was built
+### ChatGPT Bright Data Audit
 
-A clean, modular system (engine + dashboard), ~3,900 LOC:
+Upload a Bright Data ChatGPT results export, optionally join a prompt manifest,
+and inspect records, sources, scraping, questions, intent, brand visibility,
+content features, and reports.
 
-```
-app.py                  Streamlit entry point (sidebar nav + routing)
-src/                    Engine (no Streamlit imports — testable headless)
-  config.py             paths, secrets, defaults, black-box framing text
-  url_utils.py          URL normalize / domain / redirect resolution
-  storage.py            SQLite cache + run index + JSON snapshots
-  gemini_client.py      grounded generation + trace extraction + embeddings
-  apify_runner.py       SERP actor + content-crawler actor (+ normalizers)
-  chunking.py           heading-aware text chunking
-  similarity.py         lexical (offline) OR Gemini-embedding cosine
-  source_type.py        rule-based source classification + official flag
-  matching.py           tiered citation↔candidate matching + recall@K
-  features.py           one feature row per candidate (+ chunk scores)
-  analysis.py           cited vs non-cited comparison, correlations
-  pipeline.py           cache-aware stages + one-click run_full()
-  report.py             CSV / JSON / Markdown / HTML exports
-  demo.py               synthetic run for offline exploration
-ui/                     theme, components, Plotly charts, 8 dashboard views
-```
+### Content Econometrics QA
 
-**Storage:** SQLite (`data/audit.db`) for an API-result cache (so Gemini/Apify
-calls are never repeated by accident) and a run index; full run snapshots as JSON
-in `data/runs/`; raw API payloads in `data/raw/`; exports in `data/exports/`.
+The QA workspace reads the validated Area Condo econometrics package and offers:
 
----
+- scrape and measurable-content coverage;
+- scraped-versus-live split-screen page inspection;
+- prompt-level source exploration;
+- general and real-estate taxonomy exploration;
+- read-only notebook 09 and notebook 11 model tables;
+- with-versus-without feature contribution diagnostics for the validated M2 and W1 models;
+- manual scrape and taxonomy reviews stored separately in SQLite.
 
-## 2. How the pipeline works
+Choose **Previous Area Condo 500** in the sidebar to reuse the existing 500-prompt
+manifest, normalized source tables, model package, and 2,881 crawler snapshots.
+The 1.3 GB raw Bright Data output is retained for lineage but is not loaded into
+the interactive app. A custom econometrics package path can also be selected.
 
-```
-Prompt
-  → Gemini (Google Search Grounding)        gemini_client.run_grounded
-      → answer · search queries · citation URLs · grounding metadata
-      → resolve Vertex redirect URLs to real publisher URLs
-  → Reconstructed SERP (Apify)              apify_runner.run_serp
-      → ranked candidate websites
-  → Scrape candidates (Apify)               apify_runner.run_scrape
-      → title · headings · text · markdown · metadata
-  → Citation matching                        matching.match_all
-      → exact → normalized → final_redirect → canonical → amp → domain-only
-      → label: cited=1 / non-cited candidate=0 · recall@5/10/20/50
-  → Feature extraction                       features.build_features
-      → rank, similarities (proxy), source type, freshness, word/heading counts
-  → Compare / analyze                        analysis.*
-  → Dashboard + Export
+Live pages are embedded only on demand. Some sites block iframe embedding with
+`X-Frame-Options` or CSP `frame-ancestors`; the interface retains an open-page
+fallback for those sites.
+
+## Pipeline
+
+```text
+Bright Data ChatGPT output + prompt manifest
+  -> normalize prompts and surfaced sources
+  -> normalize URLs and remove tracking parameters
+  -> Bright Data Crawler API scrape and raw snapshot cache
+  -> parse and audit extraction quality
+  -> general page-function and real-estate taxonomy
+  -> source-appearance and URL-level feature tables
+  -> notebook 07 scrape/content analysis
+  -> notebook 08 final pre-LPM diagnostics
+  -> notebook 09 content-feature econometrics + interpretation patch
+  -> notebook 10 writing/factual-density feature layer
+  -> notebook 11 writing/factual-density econometrics
+  -> notebook 12 HTML document-structure and generated-Markdown QA
+  -> read-only QA frontend and manual review export
 ```
 
-Each stage is cached on a hash of its inputs. Run stages one-by-one (each section
-has its own button) or click **⚡ Run full audit** to chain them end-to-end with a
-progress bar.
+The full audit contains 500 prompts. The measurable-content LPM sample contains
+498 prompts because two prompts have no measurable content observations.
 
----
+## Repository boundary
 
-## 3. Set up API keys
-
-Two keys are required for live runs (the **demo run needs none**):
+Source code and clean notebooks are versioned here. Raw crawler responses,
+generated CSVs, model outputs, and figures stay outside Git. The existing
+research archive is configured through `.env`:
 
 ```bash
+CITESCOPE_RESEARCH_DATA_DIR=/Volumes/ExtremeSD/Metier/Research/CompareSearch-v2-clean
+```
+
+Use `CITESCOPE_ECONOMETRICS_DATA_DIR` and
+`CITESCOPE_ECONOMETRICS_OUTPUT_DIR` when inputs and generated outputs live in
+different locations.
+
+## Setup
+
+```bash
+cd /Volumes/ExtremeSD/Metier/Research/CiteScope-content-audit
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
-Edit `.env`:
-
-```
-GEMINI_API_KEY=...      # https://aistudio.google.com/apikey
-APIFY_TOKEN=...         # https://console.apify.com/account/integrations
-```
-
-Keys are read from the environment only (never written to disk or logged). The
-sidebar shows ✅/⛔ for each key. Optional overrides (actors, default model,
-embedding model) are listed in `.env.example`.
-
----
-
-## 4. Run the app
+Add a freshly rotated Bright Data key only when live scraping is required:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
+BRIGHTDATA_API_KEY=
+BRIGHTDATA_PROVIDER_MODE=crawler_api
+BRIGHTDATA_CRAWLER_DATASET_ID=
+BRIGHTDATA_CRAWLER_ASYNC=true
+BRIGHTDATA_CRAWLER_ENDPOINT=https://api.brightdata.com/datasets/v3/trigger
 ```
 
-Then open the URL Streamlit prints. **No keys yet?** Click
-**🧪 Load demo run** in the sidebar to explore the entire dashboard with realistic
-synthetic data and zero API spend.
+Never commit `.env` or paste bearer tokens into source files or notebooks.
 
-**Tests:** `pip install -r requirements-dev.txt && pytest -q` covers matching/recall
-variants, truncation metadata, retry/backoff, the Gemini-failure short-circuit, and the
-embedding cache. CI runs them on every push (`.github/workflows/ci.yml`).
+## Validate and run
 
-> **Model note:** the default is `gemini-2.5-flash` (a reliable grounding model).
-> Model availability depends on your account — pick a current model from the
-> selector if needed. The integration uses the stable `generate_content` +
-> `grounding_metadata` path and preserves the raw response for every run.
+Validate the external econometrics package before opening or rerunning models:
 
----
+```bash
+.venv/bin/python scripts/v2_validate_econometrics_migration.py
+```
 
-## 5. Inputs the app expects
+Expected status:
 
-- **Prompt** — your question (e.g. *"What are the best tailors in Bangkok for custom suits?"*).
-- **Gemini settings** — model, temperature, grounding on/off, optional system prompt.
-- **SERP settings** — top-K (10/20/30/50), country code, language code, which
-  queries to reconstruct (observed queries, manual queries, or a prompt fallback).
-- **Scraping settings** — scope (top-K / only cited / all / selected URLs),
-  crawler type (cheerio / playwright), use-cache toggle.
-- **Analysis settings** — similarity method (lexical offline / Gemini embeddings).
-- **Batch mode** — a newline-separated list of prompts to run and aggregate.
+```text
+migration_parity_passed
+```
 
----
+Run the application:
 
-## 6. Outputs produced
+```bash
+.venv/bin/streamlit run app.py
+```
 
-- **Gemini trace** — answer, observed search queries (fallbacks clearly marked),
-  citation URLs (raw + resolved), grounding supports, raw response.
-- **Reconstructed SERP table** — query, rank, title, URL, snippet, domain, type,
-  with cited rows flagged.
-- **Scraped page dataset** — url, final/canonical url, title, headings, text,
-  markdown, metadata, status.
-- **Citation matching** — per-citation match type (strong vs **weak domain-only**),
-  matched rank, unmatched list, three recall variants
-  `strict_recall` / `canonical_recall` / `domain_inclusive_recall @5/10/20/50`,
-  and per-tier match counts. Only strong matches set `cited = 1`.
-- **Feature table** — one row per candidate: cited label (strong only),
-  `weak_domain_match`, rank, **pre-answer** + **post-output** similarity proxies,
-  source type, `institutional_official` + `brand_official_candidate`, word/char
-  counts + truncation metadata, heading count, freshness, scrape status, match type.
-- **Exports** — feature/SERP/matches CSV, full-run JSON, Markdown + HTML report.
+Then open `http://localhost:8501`.
 
----
+Run all tests:
 
-## 7. Visualizations included
+```bash
+.venv/bin/python -m compileall -q src ui scripts tests app.py
+.venv/bin/pytest -q
+```
 
-- **Pipeline diagram** with live stage counts (Overview).
-- **Citation recall@K** grouped bar — strict / canonical / domain-inclusive.
-- **SERP rank box/strip** — where cited sites sit in the reconstruction.
-- **Cited vs non-cited** grouped means + per-feature distribution boxes.
-- **Source-type** stacked bars + per-type cite-rate.
-- **Match-type distribution** bar.
-- **Chunk-relevance** chart (best chunk highlighted) + expandable chunk text.
-- **Similarity radar** per candidate (vs all-candidate average).
-- **Feature heatmap** (cited rows marked, min-max normalized).
-- **Query → candidate → citation Sankey** flow.
-- **Website cards** with inline similarity bars and badges.
-- **Length-vs-similarity** scatter (length-bias check) + **official-signals** bar.
-- **Batch summary** — pooled cited-vs-non-cited medians with Mann-Whitney U
-  p-values and bootstrap CIs, plus recall@K averaged across runs.
+## Econometric guardrails
 
-The dashboard separates **pre-answer signals** (rank, query similarity — the cleaner,
-non-circular signals) from **post-output overlap** (page/chunk–answer similarity), which
-carries a loud caveat because the answer may be generated from cited sources.
+- Start substantive reporting with M1 and M2.
+- Do not use final enriched page type as a main control.
+- Use `page_type_url_seed_general_collapsed` only as a sensitivity.
+- Report M5 strong-content and M10 outlier sensitivity before interpretation.
+- Keep answer-derived similarity, source position, observed rank, source origin,
+  and citation-rate proxies out of the main content model.
+- Treat content availability as structured missingness, not random noise.
 
----
-
-## 8. Limitations
-
-- We observe only what the Gemini API exposes; the **true internal retrieval set
-  is unknown**.
-- The **reconstructed SERP can differ** from what the AI saw (time, region,
-  personalization, ranking churn, logged-in state).
-- **Similarity is a proxy** for relatedness, not evidence the model read a page or
-  chunk. Lexical similarity is shallow; embeddings are better but still a proxy.
-- **Source-type / official** flags are heuristics.
-- **Freshness** depends on the page exposing a parseable date.
-- Citation **redirect resolution** and scraping can fail for some pages (handled
-  gracefully, surfaced as failures).
-- Findings are **per-run and correlational** — not statistically powered claims.
-
----
-
-## 9. What to improve next
-
-Implemented in this iteration: **batch multi-prompt aggregation** with Mann-Whitney U +
-bootstrap CIs, **three recall variants**, **weak/strong match separation**, **pre-answer vs
-post-output** feature split with circularity/length caveats, **brand-official candidate**
-detection, **retry/backoff**, **Gemini-failure short-circuit**, **concurrent redirect
-resolution**, and a **persistent embedding cache**.
-
-Still worth doing:
-- **Logistic regression / feature importances** on the pooled batch dataset.
-- **Compare across AI engines/models** for the same prompt.
-- **SERP feature parity** (people-also-ask, knowledge panels, dates) and
-  position-vs-page-fold modeling.
-- **Pluggable embedding providers** + embedding-cache TTL.
-- **NER-based** entity/brand detection to replace the domain-token heuristic.
-
----
-
-### Terminology (used carefully throughout)
-
-reconstructed SERP · candidate websites · cited websites · non-cited SERP
-candidates · citation matching · citation recall@K · observable patterns ·
-semantic overlap proxy · chunk-level similarity · black-box analysis.
-
-We avoid: "AI rejected this website", "AI definitely saw this", "exact internal
-search result", "proof of citation reason", "causal explanation".
+The full notebook sequence and data contract are documented in
+[`docs/CHATGPT_CONTENT_ECONOMETRICS_PIPELINE.md`](docs/CHATGPT_CONTENT_ECONOMETRICS_PIPELINE.md).
+The deterministic website/page classification method is documented in
+[`docs/GENERAL_PAGE_TAXONOMY_RULE_V2.md`](docs/GENERAL_PAGE_TAXONOMY_RULE_V2.md).
+Machine-readable sample and artifact checks live in
+[`config/econometrics_pipeline_manifest.json`](config/econometrics_pipeline_manifest.json).

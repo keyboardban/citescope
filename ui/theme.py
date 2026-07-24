@@ -40,9 +40,8 @@ CITED_SEQ = {"cited": COLORS["cited"], "non-cited": COLORS["noncited"]}
 
 
 def inject_css() -> None:
-    if st.session_state.get("_css_done"):
-        return
-    st.session_state["_css_done"] = True
+    # Streamlit rebuilds the page DOM on every rerun, so the style element must
+    # be emitted on every pass even though session state persists.
     c = COLORS
     st.markdown(
         f"""
@@ -55,7 +54,7 @@ def inject_css() -> None:
         /* hero header */
         .cs-hero {{
             background: linear-gradient(120deg, {c['primary']} 0%, #6366f1 55%, #8b5cf6 100%);
-            color: #fff; border-radius: 18px; padding: 22px 28px; margin-bottom: 18px;
+            color: #fff; border-radius: 8px; padding: 22px 28px; margin-bottom: 18px;
             box-shadow: 0 8px 24px rgba(79,70,229,.22);
         }}
         .cs-hero h1 {{ color:#fff; font-size: 1.55rem; margin: 0 0 4px 0; font-weight: 700; }}
@@ -70,8 +69,8 @@ def inject_css() -> None:
         /* metric cards */
         .cs-metrics {{ display:flex; gap:12px; flex-wrap:wrap; margin: 6px 0 16px 0; }}
         .cs-metric {{
-            background:{c['card']}; border:1px solid {c['border']}; border-radius:14px;
-            padding:14px 16px; min-width:135px; flex:1; box-shadow:0 1px 3px rgba(16,24,40,.04);
+            background:{c['card']}; border:1px solid {c['border']}; border-radius:8px;
+            padding:14px 16px; min-width:120px; flex:1; box-shadow:0 1px 3px rgba(16,24,40,.04);
         }}
         .cs-metric .v {{ font-size:1.7rem; font-weight:750; color:{c['primary']}; line-height:1.1; }}
         .cs-metric .l {{ font-size:.72rem; color:{c['muted']}; text-transform:uppercase;
@@ -80,7 +79,7 @@ def inject_css() -> None:
 
         /* generic card / panel */
         .cs-card {{
-            background:{c['card']}; border:1px solid {c['border']}; border-radius:14px;
+            background:{c['card']}; border:1px solid {c['border']}; border-radius:8px;
             padding:16px 18px; box-shadow:0 1px 3px rgba(16,24,40,.04); margin-bottom:12px;
         }}
 
@@ -95,7 +94,7 @@ def inject_css() -> None:
         .b-brand {{ background:#ecfeff; color:#0e7490; }}
 
         /* website card */
-        .site-card {{ background:{c['card']}; border:1px solid {c['border']}; border-radius:14px;
+        .site-card {{ background:{c['card']}; border:1px solid {c['border']}; border-radius:8px;
             padding:14px 16px; margin-bottom:10px; box-shadow:0 1px 3px rgba(16,24,40,.04); }}
         .site-card.cited {{ border-left:4px solid {c['cited']}; }}
         .site-card.noncited {{ border-left:4px solid {c['noncited']}; }}
@@ -108,7 +107,7 @@ def inject_css() -> None:
 
         /* pipeline diagram */
         .pipe {{ display:flex; align-items:stretch; gap:6px; flex-wrap:wrap; margin:8px 0 4px 0; }}
-        .pipe-step {{ background:{c['card']}; border:1px solid {c['border']}; border-radius:12px;
+        .pipe-step {{ background:{c['card']}; border:1px solid {c['border']}; border-radius:8px;
             padding:10px 12px; text-align:center; min-width:96px; flex:1; }}
         .pipe-step .pv {{ font-size:1.25rem; font-weight:750; color:{c['primary']}; }}
         .pipe-step .pl {{ font-size:.68rem; color:{c['muted']}; text-transform:uppercase; font-weight:600; }}
@@ -116,12 +115,12 @@ def inject_css() -> None:
 
         /* note / callout */
         .cs-note {{ background:{c['primary_soft']}; border-left:4px solid {c['primary']};
-            padding:10px 14px; border-radius:10px; font-size:.82rem; color:#3730a3; margin:6px 0; }}
+            padding:10px 14px; border-radius:6px; font-size:.82rem; color:#3730a3; margin:6px 0; }}
         .cs-caveat {{ background:{c['weak_soft']}; border-left:4px solid {c['weak']};
-            padding:10px 14px; border-radius:10px; font-size:.82rem; color:#92400e; margin:6px 0; }}
+            padding:10px 14px; border-radius:6px; font-size:.82rem; color:#92400e; margin:6px 0; }}
 
         /* buttons */
-        .stButton>button, .stDownloadButton>button {{ border-radius:10px; font-weight:600; }}
+        .stButton>button, .stDownloadButton>button {{ border-radius:6px; font-weight:600; }}
         .stButton>button[kind="primary"] {{ background:{c['primary']}; border:none; }}
 
         /* sidebar */

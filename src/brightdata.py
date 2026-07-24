@@ -196,6 +196,7 @@ def load_records(raw: str | bytes, filename: str = "") -> tuple[list[dict], list
     """Load raw records from a JSON or CSV export. Returns (records, warnings)."""
     warnings: list[str] = []
     text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    text = text.lstrip("\ufeff")
     name = (filename or "").lower()
     is_csv = name.endswith(".csv") or (not name.endswith(".json") and not text.lstrip()[:1] in ("[", "{"))
 

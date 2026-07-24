@@ -1,5 +1,13 @@
 # CiteScope — Development Process, Architecture & Change Log
 
+## Econometrics Frontend Artifacts
+
+`src/econometrics_eda_v2/econometrics_frontend.py` owns the versioned read-only frontend contract. `scripts/v2_build_econometrics_frontend_artifacts.py` transforms existing package CSVs into compact artifacts; `scripts/v2_validate_econometrics_frontend_artifacts.py` verifies schemas, row counts, versions, and hashes. UI code in `ui/views/econometrics_frontend.py` and `ui/econometrics_charts.py` must load only this contract. Do not move model fitting, raw-crawler reads, or expensive feature extraction into Streamlit.
+
+`src/econometrics_eda_v2/model_comparison.py` builds the cross-model artifacts entirely offline from validated Notebook 09–11 tables. It harmonizes interpretation units, applies frozen thresholds from `config/model_comparison_thresholds.yaml`, records specification and sample changes separately, compares covariance estimators, and exposes supported intent-specific slopes.
+
+The current contract version is `econometrics_frontend_v2`. Additive columns require a builder and UI update; renamed or removed required columns require a new contract version.
+
 **Project:** AI Search Citation Audit (`citescope`)
 **Repo:** https://github.com/keyboardban/citescope
 **Status:** 3 commits — `4a61da4` (initial build, 2026-06-23) · `dcce37b` (validity/matching/batch, 2026-06-24) · `9569012` (Topic Studies + docs, 2026-06-24) — plus a working set adding the **ChatGPT Bright Data** mode (uncommitted at time of writing).

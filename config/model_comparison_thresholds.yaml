@@ -1,0 +1,24 @@
+schema_version: model_comparison_thresholds_v1
+status: approved_project_default
+calibration_note: Generic thresholds fixed before comparison labels are generated; they are not tuned by feature significance or preferred direction.
+minimum_baseline_magnitude_pp: 1.0
+stable_magnitude_absolute_threshold_pp: 1.0
+attenuation_absolute_threshold_pp: 2.0
+attenuation_relative_threshold: 0.40
+amplification_absolute_threshold_pp: 2.0
+amplification_relative_threshold: 0.40
+sign_flip_minimum_magnitude_pp: 1.0
+large_sample_change_percent: 0.10
+large_ci_width_change_percent: 0.25
+estimate_equality_tolerance_pp: 0.000001
+low_support_rows: 100
+low_support_prompts: 30
+low_support_urls: 50
+low_support_domains: 20
+covariance_standard_error_ratio_threshold: 1.25
+preferred_covariance_order:
+  - two_way_cluster_prompt_url
+  - cluster_normalized_url
+  - cluster_prompt_id
+  - HC3
+  - logit_standard_ame

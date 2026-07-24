@@ -1,0 +1,6 @@
+analysis_layer,analysis_type,formula_scope,focal_predictors,controls,fixed_effects,branch_from,role,implementation_status
+D0,descriptive,"No regression; distributions, support, missingness, variation, and raw cited rates","Approved features summarized separately",None,None,None,descriptive foundation,pending approval
+FE1,one-feature LPM,"cited ~ focal_feature + C(prompt_id)","One approved focal Core-General feature per run",None,prompt,D0,headline one-feature family,pending approval
+FE2,joint LPM,"cited ~ approved Core-General features + extraction-quality control + C(prompt_id)","Small approved Core-General feature vector","content_strength as extraction-quality control",prompt,FE1,headline joint model,pending approval
+FE3,joint LPM,"FE2 + C(source_root_domain)","Same focal predictors as FE2","Same controls as FE2","prompt; source_root_domain",FE2,domain-confounding branch,pending approval
+FE4,joint LPM,"FE2 + page-type and source-type categorical controls","Same focal predictors as FE2","content_strength; page_type_family_general_collapsed; source_type_general_collapsed",prompt,FE2,taxonomy-control branch,pending approval

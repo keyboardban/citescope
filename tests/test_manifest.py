@@ -16,6 +16,14 @@ def test_parse_manifest_csv_and_expected():
     assert e["P1"]["expected_source_types"] == ["review", "ecommerce", "official_brand"]
 
 
+def test_parse_manifest_strips_utf8_bom_from_prompt_id_header():
+    man = brightdata.parse_manifest(
+        "\ufeffprompt_id,intent,prompt\nAREA_001,Recommendation,Best condo in Bangkok\n",
+        "manifest.csv",
+    )
+    assert man["entries"][0]["prompt_id"] == "AREA_001"
+
+
 def test_apply_manifest_matches_and_attaches():
     run = demo.make_demo_brightdata()
     stats = brightdata.apply_manifest(run, demo.make_demo_manifest())

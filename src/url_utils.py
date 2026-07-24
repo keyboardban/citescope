@@ -7,13 +7,16 @@ forms are produced here and used everywhere (matching, features, classification)
 from __future__ import annotations
 
 import re
+import tempfile
+from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 import requests
 import tldextract
 
 # Use the bundled public-suffix snapshot (no network at runtime, deterministic).
-_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+_TLDEXTRACT_CACHE = Path(tempfile.gettempdir()) / "citescope_tldextract"
+_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=str(_TLDEXTRACT_CACHE))
 
 # Query params that never change page identity — dropped during normalisation.
 _TRACKING_PARAMS = {
@@ -81,6 +84,19 @@ def normalize_url(url: str) -> str:
     query = urlencode(sorted(kept))
 
     return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def strip_tracking_params(url: str) -> str:
+    """Remove tracking parameters without otherwise canonicalizing a fetch URL."""
+    raw = _ensure_scheme(url)
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return raw
+    kept = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in _TRACKING_PARAMS]
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(kept), ""))
 
 
 def domain(url: str) -> str:

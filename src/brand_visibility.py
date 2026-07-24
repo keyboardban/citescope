@@ -144,7 +144,10 @@ _KW = {
     "has_step_by_step": ["step by step", "step-by-step", "how to", "procedure", "steps", "ขั้นตอน", "วิธีการ", "วิธี"],
     "has_contact_info": ["contact us", "contact", "ติดต่อ", "ติดต่อเรา"],
     "has_location_info": ["address", "location", "directions", "how to get", "ที่ตั้ง", "แผนที่", "การเดินทาง"],
-    "has_price_or_package": ["price", "pricing", "package", "cost", "fee", "promotion", "ราคา", "แพ็กเกจ", "แพคเกจ", "ค่าบริการ", "โปรโมชั่น"],
+    "has_price_or_package": [
+        "price", "pricing", "package", "cost", "fee", "payment", "promotion", "discount",
+        "ราคา", "แพ็กเกจ", "แพคเกจ", "ค่าใช้จ่าย", "ค่าบริการ", "โปรโมชัน", "โปรโมชั่น",
+    ],
     "has_opening_hours": ["opening hours", "open hours", "hours of operation", "business hours", "เวลาทำการ", "เปิดบริการ", "เวลาเปิด"],
     "has_booking_or_appointment": ["booking", "book now", "appointment", "reserve", "reservation", "test drive", "นัดหมาย", "จองคิว", "จอง", "ทดลองขับ"],
     "has_author": ["written by", "author", "เขียนโดย", "ผู้เขียน", "แพทย์ผู้เขียน"],
@@ -180,6 +183,7 @@ def _empty_content() -> dict:
 def _page_type(url: str, source_type: str, flags: dict) -> str:
     path = (url or "").lower()
     st = source_type or "unknown"
+    price_path_evidence = any(k in path for k in ("/price", "/pricing", "/package", "ราคา", "แพ็กเกจ", "แพคเกจ"))
     if st == "forum":
         return "forum_thread"
     if st == "review":
@@ -198,7 +202,7 @@ def _page_type(url: str, source_type: str, flags: dict) -> str:
         return "location_page"
     if any(k in path for k in ("/faq", "faq", "คำถาม")):
         return "faq_page"
-    if any(k in path for k in ("/price", "/pricing", "/package", "ราคา", "แพ็กเกจ")) or flags.get("has_price_or_package"):
+    if price_path_evidence or flags.get("has_price_or_package"):
         return "price_package_page"
     if any(k in path for k in ("/service", "/treatment", "บริการ")):
         return "service_page"

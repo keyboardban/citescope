@@ -1,3 +1,4 @@
-# Dev/test dependencies (install on top of requirements.txt)
+# Dev/test dependencies for the application and econometrics layers.
 -r requirements.txt
+-r requirements-econometrics.txt
 pytest>=8.0

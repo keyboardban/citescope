@@ -65,6 +65,17 @@ def init_db() -> None:
                 n_candidates  INTEGER,
                 snapshot_path TEXT
             );
+            CREATE TABLE IF NOT EXISTS econometrics_reviews (
+                normalized_url      TEXT PRIMARY KEY,
+                source_url          TEXT,
+                snapshot_key        TEXT,
+                review_status       TEXT NOT NULL,
+                scrape_completeness TEXT,
+                live_page_changed   INTEGER,
+                taxonomy_suggestion TEXT,
+                notes               TEXT,
+                reviewed_at         TEXT NOT NULL
+            );
             """
         )
 
@@ -258,3 +269,56 @@ def write_export(filename: str, content: str | bytes) -> str:
     with open(path, mode) as fh:
         fh.write(content)
     return str(path)
+
+
+# --------------------------------------------------------------------------- #
+# Econometrics QA reviews (kept separate from analytical/model datasets)
+# --------------------------------------------------------------------------- #
+def save_econometrics_review(review: dict) -> None:
+    init_db()
+    normalized_url = str(review.get("normalized_url") or "").strip()
+    if not normalized_url:
+        raise ValueError("normalized_url is required")
+    with _conn() as con:
+        con.execute(
+            """INSERT OR REPLACE INTO econometrics_reviews
+               (normalized_url, source_url, snapshot_key, review_status,
+                scrape_completeness, live_page_changed, taxonomy_suggestion,
+                notes, reviewed_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                normalized_url,
+                str(review.get("source_url") or ""),
+                str(review.get("snapshot_key") or ""),
+                str(review.get("review_status") or "unreviewed"),
+                str(review.get("scrape_completeness") or ""),
+                None if review.get("live_page_changed") is None else int(bool(review["live_page_changed"])),
+                str(review.get("taxonomy_suggestion") or ""),
+                str(review.get("notes") or ""),
+                str(review.get("reviewed_at") or now_iso()),
+            ),
+        )
+
+
+def get_econometrics_review(normalized_url: str) -> dict | None:
+    init_db()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM econometrics_reviews WHERE normalized_url = ?",
+            (normalized_url,),
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    if result["live_page_changed"] is not None:
+        result["live_page_changed"] = bool(result["live_page_changed"])
+    return result
+
+
+def list_econometrics_reviews() -> list[dict]:
+    init_db()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM econometrics_reviews ORDER BY reviewed_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]

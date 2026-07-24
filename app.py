@@ -1,34 +1,17 @@
-"""AI Search Citation Audit — Streamlit entry point.
-
-A black-box observational audit: compare websites Gemini cites against an
-independently reconstructed SERP for the same search queries.
-"""
+"""ChatGPT source audit and content-econometrics QA entry point."""
 
 from __future__ import annotations
 
 import streamlit as st
 
 from src import config, storage
-from src.demo import make_demo_run
-from ui import components as C
-from ui.state import get_run, init_state, set_run
+from src import econometrics_qa as qa_data
+from ui.state import init_state
 from ui.theme import inject_css
-from ui.views import (
-    batch,
-    chatgpt,
-    content_visualizer,
-    feature_analysis,
-    matching,
-    overview,
-    report,
-    run_search,
-    scraping,
-    serp,
-    topics,
-)
+from ui.views import chatgpt, econometrics_qa
 
 st.set_page_config(
-    page_title="AI Search Citation Audit",
+    page_title="CiteScope ChatGPT Content Audit",
     page_icon="🔎",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -38,85 +21,80 @@ inject_css()
 config.ensure_dirs()
 init_state()
 
-VIEWS = {
-    "Overview": ("🧭", overview.render),
-    "Run AI Search": ("🤖", run_search.render),
-    "SERP Reconstruction": ("🌐", serp.render),
-    "Web Scraping": ("🕸️", scraping.render),
-    "Citation Matching": ("🎯", matching.render),
-    "Content Visualizer": ("🔬", content_visualizer.render),
-    "Feature Analysis": ("📈", feature_analysis.render),
-    "Topic Studies": ("🔭", topics.render),
-    "Batch Mode": ("📚", batch.render),
-    "Report / Export": ("📤", report.render),
-}
-
-MODES = ["Gemini SERP Reconstruction Audit", "ChatGPT Bright Data Audit"]
+MODES = ["ChatGPT Bright Data Audit", "Content Econometrics QA"]
 
 
 def _clear_cg() -> None:
     st.session_state.update(cg_run=None, cg_pages={}, cg_features=None, cg_chunks={}, cg_analysis=None)
 
 
-def _sidebar() -> tuple[str, str]:
+def _open_previous_area_condo() -> None:
+    st.session_state["audit_mode"] = MODES[1]
+    st.session_state["qa_data_source"] = "Previous Area Condo 500"
+
+
+def _sidebar() -> tuple[str, str, str]:
+    package_dir = ""
+    prompt_manifest_path = ""
     with st.sidebar:
-        st.markdown("## 🔎 Citation Audit")
+        st.markdown("## CiteScope")
         mode = st.radio("Audit mode", MODES,
-                        format_func=lambda m: ("🔷 " if m == MODES[0] else "🟢 ") + m,
                         key="audit_mode")
 
         st.divider()
         if mode == MODES[0]:
-            st.radio("Navigate", list(VIEWS),
-                     format_func=lambda k: f"{VIEWS[k][0]}  {k}",
-                     key="nav_radio", label_visibility="collapsed")
+            st.caption("Upload and analyze observable ChatGPT Bright Data source records.")
+            st.button(
+                "Use previous Area Condo 500 data",
+                width="stretch",
+                on_click=_open_previous_area_condo,
+            )
         else:
-            st.caption("🟢 Upload a Bright Data export in the page (Upload tab).")
+            st.caption("Inspect scrape quality, prompts, taxonomy, and econometric outputs.")
+            preset = qa_data.previous_area_condo_preset()
+            data_source = st.selectbox(
+                "QA data source",
+                [preset.label, "Custom econometrics package"],
+                key="qa_data_source",
+            )
+            if data_source == preset.label:
+                package_dir = str(preset.package_dir)
+                prompt_manifest_path = str(preset.prompt_manifest_path or "")
+                st.caption(
+                    f"500 prompts | 2,881 crawler snapshots | "
+                    f"manifest {'available' if preset.prompt_manifest_path else 'not found'}"
+                )
+            else:
+                package_dir = st.text_input(
+                    "Package directory",
+                    value=str(qa_data.default_package_dir()),
+                    key="qa_custom_package_dir",
+                ).strip()
+                prompt_manifest_path = st.text_input(
+                    "Prompt manifest (optional)",
+                    key="qa_custom_prompt_manifest",
+                ).strip()
 
         st.divider()
-        st.markdown("**API keys** _(from `.env`)_")
-        for name in config.REQUIRED_SECRETS:
+        st.markdown("**Scraping credentials** _(from `.env`)_")
+        for name in ("BRIGHTDATA_API_KEY", "APIFY_TOKEN"):
             ok = config.secret_present(name)
-            st.markdown(("✅ " if ok else "⛔ ") + f"`{name}`")
-        st.caption("Gemini key → Gemini mode + embeddings. Apify token → scraping in **both** modes.")
+            st.markdown(("Available: " if ok else "Missing: ") + f"`{name}`")
+        st.caption("The QA explorer is read-only and does not spend scraping credits.")
 
         st.divider()
         if mode == MODES[0]:
-            if st.button("🧪 Load demo run", width="stretch",
-                         help="Explore the Gemini dashboard with synthetic data — no API calls."):
-                set_run(make_demo_run())
-                st.rerun()
-            run = get_run()
-            if run:
-                tag = "🧪 demo" if run.get("is_demo") else "live"
-                st.caption(f"Active: `{run.get('run_id','')[:20]}` · {tag}")
-                if st.button("🗑️ Clear current run", width="stretch"):
-                    set_run(None)
-                    st.rerun()
-            with st.expander("📂 Previous runs"):
-                runs = storage.list_runs(20)
-                if runs:
-                    labels = {f"{r['run_id'][:18]} · {(r.get('prompt') or '')[:22]}": r["run_id"] for r in runs}
-                    pick = st.selectbox("Load a saved run", list(labels), index=None, placeholder="select a run…")
-                    if pick and st.button("Load run", width="stretch"):
-                        loaded = storage.load_run(labels[pick])
-                        if loaded:
-                            set_run(loaded)
-                            st.rerun()
-                else:
-                    st.caption("No saved runs yet.")
-        else:
             cg = st.session_state.get("cg_run")
             if cg:
                 st.caption(f"Active file: `{(cg.get('source_file_name') or '')[:24]}` · {cg.get('n_records', 0)} records")
-                if st.button("🗑️ Clear ChatGPT run", width="stretch"):
+                if st.button("Clear ChatGPT run", width="stretch"):
                     _clear_cg()
                     st.rerun()
-            with st.expander("📂 Previous Bright Data runs"):
+            with st.expander("Previous Bright Data runs"):
                 cruns = storage.list_chatgpt_runs(20)
                 if cruns:
                     labels = {f"{r['run_id'][:18]} · {(r.get('source_file_name') or '')[:18]}": r["run_id"] for r in cruns}
-                    pick = st.selectbox("Load a saved ChatGPT run", list(labels), index=None, placeholder="select…")
+                    pick = st.selectbox("Load a saved ChatGPT run", list(labels), index=None, placeholder="select")
                     if pick and st.button("Load ChatGPT run", width="stretch"):
                         loaded = storage.load_chatgpt_run(labels[pick])
                         if loaded:
@@ -125,29 +103,34 @@ def _sidebar() -> tuple[str, str]:
                             st.rerun()
                 else:
                     st.caption("No saved Bright Data runs yet.")
+        else:
+            st.caption("Econometrics data is resolved through `CITESCOPE_RESEARCH_DATA_DIR`.")
+            st.caption(f"Manual reviews: {len(storage.list_econometrics_reviews()):,}")
 
-        with st.expander("⚙️ Cache & data"):
+        with st.expander("Cache and local data"):
             st.caption(f"DB: `{config.DB_PATH.name}` · exports: `data/exports/`")
             if st.button("Clear API cache", width="stretch"):
                 n = storage.cache_clear()
                 st.success(f"Cleared {n} cached entries.")
 
         st.divider()
-        st.caption(config.DISCLAIMER_SHORT)
+        st.caption(
+            "Black-box observational audit. Cited and more-only describe sources exposed in the "
+            "ChatGPT Bright Data output, not ChatGPT's complete internal retrieval set."
+        )
 
-    return mode, st.session_state.get("nav_radio", "Overview")
+    return mode, package_dir, prompt_manifest_path
 
 
 def main() -> None:
-    mode, nav = _sidebar()
-    label = "ChatGPT Bright Data Audit" if mode == MODES[1] else nav
+    mode, package_dir, prompt_manifest_path = _sidebar()
     try:
-        if mode == MODES[1]:
+        if mode == MODES[0]:
             chatgpt.render()
         else:
-            VIEWS[nav][1]()
+            econometrics_qa.render(package_dir, prompt_manifest_path)
     except Exception as exc:  # keep the app alive; show the error in-page
-        st.error(f"Something went wrong rendering **{label}**: {type(exc).__name__}: {exc}")
+        st.error(f"Something went wrong rendering **{mode}**: {type(exc).__name__}: {exc}")
         with st.expander("Traceback"):
             import traceback
             st.code(traceback.format_exc())

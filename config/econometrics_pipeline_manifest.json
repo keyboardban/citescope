@@ -1,0 +1,151 @@
+{
+  "schema_version": "1.0",
+  "study_name": "area-condo / SCOPE-relevant nonbranded audit",
+  "topic_slug": "scope_condo_nonbranded",
+  "full_audit_prompt_count": 500,
+  "measurable_content_prompt_count": 498,
+  "canonical_notebooks": [
+    "notebooks/07_area_condo_brightdata_content_analysis_master.ipynb",
+    "notebooks/08_area_condo_final_pre_lpm_master_notebook.ipynb",
+    "notebooks/09_area_condo_content_feature_econometrics.ipynb",
+    "notebooks/09_area_condo_content_feature_econometrics_v2_interpretation_patch.ipynb",
+    "notebooks/10_area_condo_writing_factual_density_feature_layer.ipynb",
+    "notebooks/11_area_condo_writing_factual_density_econometrics.ipynb",
+    "notebooks/12_area_condo_document_structure_features.ipynb"
+  ],
+  "data_contract": [
+    {
+      "path": "data/content_lpm_all_surfaced_rows.csv",
+      "expected": {
+        "rows": 5758,
+        "columns": 52,
+        "unique_urls": 2881,
+        "unique_prompts": 498,
+        "unique_domains": 586,
+        "cited_rows": 1893
+      },
+      "required_columns": [
+        "prompt_id",
+        "normalized_url",
+        "source_root_domain",
+        "cited",
+        "content_feature_available"
+      ]
+    },
+    {
+      "path": "data/content_lpm_measurable_rows.csv",
+      "expected": {
+        "rows": 5264,
+        "columns": 52,
+        "unique_urls": 2600,
+        "unique_prompts": 498,
+        "unique_domains": 541,
+        "cited_rows": 1708
+      },
+      "required_columns": [
+        "prompt_id",
+        "normalized_url",
+        "source_root_domain",
+        "cited",
+        "content_strength",
+        "page_type_url_seed_general_collapsed"
+      ]
+    },
+    {
+      "path": "data/content_lpm_measurable_rows_with_writing_factual_features.csv",
+      "expected": {
+        "rows": 5264,
+        "columns": 140,
+        "unique_urls": 2600,
+        "unique_prompts": 498,
+        "unique_domains": 541,
+        "cited_rows": 1708
+      },
+      "required_columns": [
+        "prompt_id",
+        "normalized_url",
+        "cited",
+        "has_table",
+        "factual_numeric_density_score",
+        "location_transit_specificity_score",
+        "prompt_page_relevance_score"
+      ]
+    },
+    {
+      "path": "data/url_content_evidence_compact.csv",
+      "expected": {
+        "rows": 2881,
+        "columns": 29,
+        "unique_urls": 2881,
+        "unique_domains": 586
+      },
+      "required_columns": [
+        "normalized_url",
+        "source_url",
+        "source_root_domain",
+        "page_text_excerpt",
+        "scrape_success",
+        "content_strength"
+      ]
+    },
+    {
+      "path": "data/prompt_reference.csv",
+      "expected": {
+        "rows": 500,
+        "columns": 6,
+        "unique_prompts": 500
+      },
+      "required_columns": [
+        "prompt_id",
+        "prompt",
+        "intent",
+        "expansion_group"
+      ]
+    }
+  ],
+  "required_model_artifacts": [
+    "tables/09_content_feature_econometrics/09_minimum_reporting_table.csv",
+    "tables/core_general_content_feature_dictionary.csv",
+    "tables/core_general_table_feature_dictionary.csv",
+    "tables/core_general_table_taxonomy_allowed_values.csv",
+    "tables/core_general_table_feature_registry_diff.csv",
+    "tables/core_general_table_schema_validation.csv",
+    "tables/core_general_table_feature_qa_plan.csv",
+    "reports/core_general_table_registry_revision_report.md",
+    "reports/core_general_table_schema_revision_report.md",
+    "reports/core_general_table_open_decisions.md",
+    "tables/09_content_feature_econometrics/09_gemini_taxonomy_join_audit.csv",
+    "tables/09_content_feature_econometrics/M4_gemini_taxonomy_sensitivity_results.csv",
+    "tables/09_content_feature_econometrics/M4R_rule_v2_taxonomy_robustness_results.csv",
+    "tables/09_content_feature_econometrics/interp_patch/09_minimum_reporting_table_v2_interpretation_patch.csv",
+    "tables/09_content_feature_econometrics/interp_patch/focal_feature_robustness_classification.csv",
+    "tables/11_writing_factual_density_econometrics/11_minimum_reporting_table.csv",
+    "tables/11_writing_factual_density_econometrics/11_writing_factual_robustness_classification.csv",
+    "tables/frontend/econometric_feature_ablation.csv",
+    "tables/econometrics_frontend/econometrics_frontend_manifest.json",
+    "tables/econometrics_frontend/econometrics_overview_summary.json",
+    "tables/econometrics_frontend/core_general_feature_scorecard.csv",
+    "tables/econometrics_frontend/feature_model_estimates.csv",
+    "tables/econometrics_frontend/feature_example_pages.csv",
+    "tables/econometrics_frontend/feature_comparable_pairs.csv",
+    "tables/econometrics_frontend/econometrics_model_comparison_manifest.json",
+    "tables/econometrics_frontend/model_comparison_thresholds.yaml",
+    "tables/econometrics_frontend/feature_model_estimates_harmonized.parquet",
+    "tables/econometrics_frontend/feature_model_comparisons.parquet",
+    "tables/econometrics_frontend/feature_model_transition_labels.parquet",
+    "tables/econometrics_frontend/feature_covariance_comparisons.parquet",
+    "tables/econometrics_frontend/feature_intent_interaction_contrasts.parquet",
+    "tables/econometrics_frontend/feature_model_comparability.parquet",
+    "tables/econometrics_frontend/feature_model_comparison_summary.parquet",
+    "reports/09_content_feature_econometrics/interp_patch/09_content_feature_econometrics_report_v2_interpretation_patch.md",
+    "reports/11_writing_factual_density_econometrics/11_writing_factual_density_econometrics_report.md"
+  ],
+  "main_model_rules": [
+    "Start interpretation with M1 and M2.",
+    "Use Gemini page-function family and source/site type in taxonomy-adjusted sensitivity models.",
+    "Do not use Gemini taxonomy as a focal M1/M2 predictor because classification may use scraped body content.",
+    "Retain page_type_url_seed_general_collapsed only as a rule-v2 robustness comparison.",
+    "Report M5 strong-content and M10 outlier sensitivity before interpretation.",
+    "Treat estimates as conditional associations among surfaced sources, not causal effects."
+  ]
+}

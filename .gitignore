@@ -12,13 +12,32 @@ venv/
 # data artifacts (keep the folders, not the contents)
 data/**
 !data/.gitkeep
+outputs/**
+!outputs/.gitkeep
+
+# econometrics runtime artifacts
+artifacts/
+reports/generated/
+data_backup*/
+econometrics_review_packet*/
+*.zip
+
+# notebooks: keep source notebooks, discard local execution state
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# local analysis and agent tooling
+graphify-out/
+.session-sync/
+.claude/
+.codex/
 
 # os
 .DS_Store
 
 # local tooling
-.claude/settings.local.json
 .vscode/
+tmp/
 
 # office temp/lock files
 ~$*
