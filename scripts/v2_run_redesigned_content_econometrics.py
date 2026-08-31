@@ -17,7 +17,11 @@ from src.econometrics_eda_v2.redesigned_pipeline_v2 import run
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output-root", type=Path, default=Path("outputs/econometrics_redesign_v2_20260722"))
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("outputs/econometrics_redesign_v4_20260803_gemini_semantic_features"),
+    )
     args = parser.parse_args()
     repo = REPO_ROOT
     result = run(repo, args.output_root.resolve())

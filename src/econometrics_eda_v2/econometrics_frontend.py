@@ -48,7 +48,7 @@ FEATURE_SPECS = (
     FeatureSpec("content_strength", "Content extraction strength", "categorical", "extraction_quality", "core_general", "category versus strong extraction", "strong", warning="Extraction quality control, not writing quality."),
     FeatureSpec("factual_numeric_density_score", "Factual and numeric density", "continuous", "factual_density", "core_general", "one score-unit change"),
     FeatureSpec("external_evidence_score", "External evidence structure", "continuous", "external_evidence", "core_general", "one score-unit change", warning="Only a one-feature sensitivity estimate is currently available."),
-    FeatureSpec("writing_structure_score", "Writing structure", "continuous", "writing_structure", "core_general", "one score-unit change", warning="Composite diagnostic; primitives should be checked before model use."),
+    FeatureSpec("writing_structure_score_v3", "Writing structure v3", "continuous", "writing_structure", "core_general", "one score-unit change", warning="Five-component HTML-first composite; Q&A excluded because it duplicated FAQ; NA unless all five components are measured."),
     FeatureSpec("prompt_page_relevance_score", "Prompt-page relevance", "continuous", "prompt_relevance", "core_general", "one score-unit change", warning="Leakage-safe prompt-page relevance; no answer text is used."),
 )
 SPEC_BY_NAME = {spec.name: spec for spec in FEATURE_SPECS}

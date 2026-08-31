@@ -77,6 +77,57 @@ def test_gemini_taxonomy_is_additive_and_joined_by_normalized_url():
     assert result.loc[0, "llm_site_type_general"] == "official_company_or_brand"
 
 
+def test_governed_taxonomy_uses_six_class_collapse_and_domain_consensus():
+    evidence = pd.DataFrame(
+        [
+            {
+                "normalized_url": "https://majority.test/listing-a",
+                "source_root_domain": "majority.test",
+                "llm_page_type_family_general": "directory_or_listing",
+                "llm_site_type_general": "marketplace_or_platform",
+            },
+            {
+                "normalized_url": "https://majority.test/listing-b",
+                "source_root_domain": "majority.test",
+                "llm_page_type_family_general": "directory_or_listing",
+                "llm_site_type_general": "directory_or_listing_platform",
+            },
+            {
+                "normalized_url": "https://majority.test/about",
+                "source_root_domain": "majority.test",
+                "llm_page_type_family_general": "landing_or_brand_page",
+                "llm_site_type_general": "official_company_or_brand",
+            },
+            {
+                "normalized_url": "https://tie.test/blog",
+                "source_root_domain": "tie.test",
+                "llm_page_type_family_general": "informational_content",
+                "llm_site_type_general": "blog_or_content_site",
+            },
+            {
+                "normalized_url": "https://tie.test/product",
+                "source_root_domain": "tie.test",
+                "llm_page_type_family_general": "commercial_product_or_service",
+                "llm_site_type_general": "official_company_or_brand",
+            },
+        ]
+    )
+
+    result = econometrics_qa.add_governed_taxonomy_6(evidence)
+
+    majority = result[result.source_root_domain.eq("majority.test")]
+    tied = result[result.source_root_domain.eq("tie.test")]
+    assert set(majority.page_type_model_6) == {
+        "directory_or_listing", "landing_contact_or_support"
+    }
+    assert majority.source_type_model_6.eq(
+        "marketplace_or_directory_platform"
+    ).all()
+    assert tied.source_type_model_6.eq("other_or_unknown").all()
+    assert tied.source_type_domain_top_class_tie.all()
+    assert result.taxonomy_model_version.nunique() == 1
+
+
 def test_taxonomy_comparison_helpers_do_not_call_agreement_accuracy():
     evidence = pd.DataFrame(
         [

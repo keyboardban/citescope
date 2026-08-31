@@ -16,3 +16,4 @@ PyYAML>=6
 
 # Optional discovery model; the pipeline skips it when unavailable.
 # lightgbm>=4.5
+patsy>=0.5                # design matrices; imported directly by the model layers

@@ -10,3 +10,5 @@ plotly>=5.20              # all dashboard visualizations
 tldextract>=5.1           # registrable-domain extraction (public-suffix aware)
 python-dotenv>=1.0        # load API keys from .env
 requests>=2.31            # redirect resolution for grounding URLs
+beautifulsoup4>=4.12       # HTML parsing for document-structure and position features
+pydantic>=2.0             # response schemas for Gemini block classification

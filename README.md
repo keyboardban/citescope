@@ -10,6 +10,20 @@ the observed Bright Data source panel is not ChatGPT's complete internal
 retrieval set. Model estimates are conditional associations among surfaced
 sources, not causal effects or web-wide citation probabilities.
 
+## Where to start
+
+| You want to | Read |
+|---|---|
+| understand the whole pipeline | [`docs/CHATGPT_CONTENT_ECONOMETRICS_PIPELINE.md`](docs/CHATGPT_CONTENT_ECONOMETRICS_PIPELINE.md) |
+| find your way around 25 documents | [`docs/README.md`](docs/README.md) |
+| know what changed or was superseded | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
+| run something | [Setup](#setup), then [Validate and run](#validate-and-run) |
+| interpret an estimate | [Econometric guardrails](#econometric-guardrails) — read before quoting numbers |
+
+Two model families live here and are deliberately kept apart: the **governed
+content model** (D0, FE1-FE4) and the **separate position model** (M0-M6). Merging
+them would break the comparability rules each was estimated under.
+
 ## Application modes
 
 ### ChatGPT Bright Data Audit
@@ -68,7 +82,8 @@ generated CSVs, model outputs, and figures stay outside Git. The existing
 research archive is configured through `.env`:
 
 ```bash
-CITESCOPE_RESEARCH_DATA_DIR=/Volumes/ExtremeSD/Metier/Research/CompareSearch-v2-clean
+# example — point these at wherever your research archive actually lives
+CITESCOPE_RESEARCH_DATA_DIR=/path/to/CompareSearch-v2-clean
 ```
 
 Use `CITESCOPE_ECONOMETRICS_DATA_DIR` and
@@ -78,7 +93,8 @@ different locations.
 ## Setup
 
 ```bash
-cd /Volumes/ExtremeSD/Metier/Research/CiteScope-content-audit
+git clone https://github.com/keyboardban/citescope.git
+cd citescope
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
@@ -142,3 +158,30 @@ The deterministic website/page classification method is documented in
 [`docs/GENERAL_PAGE_TAXONOMY_RULE_V2.md`](docs/GENERAL_PAGE_TAXONOMY_RULE_V2.md).
 Machine-readable sample and artifact checks live in
 [`config/econometrics_pipeline_manifest.json`](config/econometrics_pipeline_manifest.json).
+
+## Separate position model
+
+The position-focused M0-M6 analysis is intentionally isolated from the governed
+D0-FE4 content model. It uses direct-answer placement, verified-table placement,
+H2/H3 question-heading placement, and standardized total numeric-evidence
+density, with prompt fixed effects and allowed controls. Total density is the
+number of validated numeric-evidence blocks per 1,000 total main-content tokens.
+The separate `numeric_evidence_early_share` position extension is the proportion
+of those blocks in the first half and is missing when a page has no numeric
+evidence; it is not included in primary M5.
+
+The position model preserves the original Gemini taxonomy in
+`page_type_detailed` and `source_type_detailed`, while regressions use
+deterministic six-class controls. `page_type_model_6` combines editorial/news,
+landing/contact/support, and small residual page functions. `source_type_model_6`
+combines marketplace/directory, blog/news, review/community, and residual
+sources. Source type is stabilized to one modal class per domain using unique
+URLs; exact top-class ties become `other_or_unknown`, and confidence is written
+to the domain audit table.
+
+```bash
+.venv/bin/python scripts/v2_run_position_model.py
+```
+
+Outputs are written only to `outputs/position_model_v1/`. The Streamlit option
+`Position Model — New` reads those files without recomputing the old model.

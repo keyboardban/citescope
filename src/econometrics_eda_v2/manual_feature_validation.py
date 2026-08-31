@@ -16,7 +16,12 @@ import pandas as pd
 from bs4 import BeautifulSoup, Comment
 
 from src.econometrics_eda_v2.gemini_taxonomy_features import attach_gemini_taxonomy
-from src.econometrics_eda_v2.redesigned_pipeline_v2 import source_paths
+from src.econometrics_eda_v2.redesigned_pipeline_v2 import (
+    GEMINI_SEMANTIC_FOCAL,
+    GEMINI_SEMANTIC_VERSION,
+    attach_gemini_semantic_features,
+    source_paths,
+)
 from src.econometrics_eda_v2.writing_factual_density_features import (
     ANSWER_SIGNAL_TERMS,
     DIRECT_ANSWER_TERMS,
@@ -24,22 +29,21 @@ from src.econometrics_eda_v2.writing_factual_density_features import (
     NUMBER_RE,
     SUMMARY_TERMS,
 )
+from src.econometrics_eda_v2.writing_structure_v3 import (
+    WRITING_STRUCTURE_COMPONENTS,
+    WRITING_STRUCTURE_SCORE,
+    WRITING_STRUCTURE_VERSION,
+    attach_writing_structure_score_v3,
+)
 from src.econometrics_qa import load_snapshot
 
 
-ARTIFACT_VERSION = "manual_feature_validation_v1"
+ARTIFACT_VERSION = "manual_feature_validation_v4_gemini_semantic"
 WRITING_VERSION = "writing_factual_density_v1"
-DOCUMENT_VERSION = "document_structure_v1"
+DOCUMENT_VERSION = "document_structure_v2"
 CONTENT_TRANSFORM_VERSION = "content_feature_transform_v1"
 TAXONOMY_VERSION = "gemini_3_1_flash_lite_taxonomy_v1"
-COMPONENTS = (
-    "has_bullet_list",
-    "has_numbered_list",
-    "has_faq_pattern",
-    "has_question_answer_structure",
-    "opening_has_summary_signal",
-    "opening_has_direct_answer_signal",
-)
+COMPONENTS = WRITING_STRUCTURE_COMPONENTS
 FACTUAL_COMPONENTS = (
     "number_token_per_1000_words",
     "percent_mention_count",
@@ -51,7 +55,8 @@ ACTIVE_FEATURES = (
     "log2_word_count_plus1",
     "has_verified_html_table",
     "factual_numeric_density_score",
-    "writing_structure_score",
+    WRITING_STRUCTURE_SCORE,
+    *GEMINI_SEMANTIC_FOCAL,
 )
 REVIEW_COLUMNS = (
     "normalized_url",
@@ -123,9 +128,23 @@ def factual_component_contributions(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def producer_version(feature_name: str) -> str:
-    if feature_name == "has_verified_html_table":
+    if feature_name in GEMINI_SEMANTIC_FOCAL:
+        return GEMINI_SEMANTIC_VERSION
+    if feature_name in {
+        "has_verified_html_table",
+        "has_main_content_unordered_list",
+        "has_main_content_ordered_list",
+    }:
         return DOCUMENT_VERSION
-    if feature_name in {"writing_structure_score", "factual_numeric_density_score", *COMPONENTS}:
+    if feature_name == WRITING_STRUCTURE_SCORE:
+        return WRITING_STRUCTURE_VERSION
+    if feature_name in {
+        "factual_numeric_density_score",
+        "has_faq_pattern",
+        "has_question_answer_structure",
+        "opening_has_summary_signal",
+        "opening_has_direct_answer_signal",
+    }:
         return WRITING_VERSION
     if feature_name == "log2_word_count_plus1":
         return CONTENT_TRANSFORM_VERSION
@@ -165,18 +184,6 @@ def sanitize_html_preview(raw_html: object, *, max_chars: int = 20000) -> str:
 def highlighted_content(text: object, row: pd.Series) -> str:
     """Escape producer text and mark evidence using governed producer terms."""
     escaped = html.escape("" if text is None else str(text))
-    if nullable_binary_status(row.get("has_bullet_list")) == "Detected":
-        escaped = re.sub(
-            r"(?im)^([ \t]*(?:[-*•●▪◦])[ \t]+[^\n]+)",
-            r'<mark class="list-evidence">\1</mark>',
-            escaped,
-        )
-    if nullable_binary_status(row.get("has_numbered_list")) == "Detected":
-        escaped = re.sub(
-            r"(?im)^([ \t]*(?:\d+[.)]|[A-Za-z][.)])[ \t]+[^\n]+)",
-            r'<mark class="list-evidence">\1</mark>',
-            escaped,
-        )
     terms: list[str] = []
     if nullable_binary_status(row.get("has_faq_pattern")) == "Detected":
         terms.extend(FAQ_TERMS)
@@ -223,10 +230,20 @@ def build_artifacts(repo: Path, output_dir: Path) -> dict[str, Any]:
     document_columns = [
         "normalized_url", "html_available", "has_html_table", "main_content_available",
         "main_content_extraction_method", "main_content_text_path", "generated_markdown_path",
+        "has_main_content_unordered_list", "has_main_content_ordered_list",
+        "list_structure_measurement_source", "main_content_unordered_list_evidence",
+        "main_content_ordered_list_evidence",
     ]
     rows = writing.merge(
         document[document_columns], on="normalized_url", how="left", validate="many_to_one",
     ).copy()
+    rows = rows.drop(
+        columns=[
+            column
+            for column in ("has_bullet_list", "has_numbered_list", "writing_structure_score")
+            if column in rows
+        ]
+    )
     html_measured = pd.to_numeric(rows["html_available"], errors="coerce").eq(1)
     rows["has_verified_html_table"] = pd.Series(pd.NA, index=rows.index, dtype="Int64")
     rows.loc[html_measured, "has_verified_html_table"] = (
@@ -235,10 +252,12 @@ def build_artifacts(repo: Path, output_dir: Path) -> dict[str, Any]:
     rows, _, taxonomy_audit = attach_gemini_taxonomy(
         rows, package, taxonomy_path=paths["taxonomy"], min_rows=20,
     )
+    rows = attach_writing_structure_score_v3(rows)
+    rows = attach_gemini_semantic_features(rows, paths["gemini_semantic"])
     component_sum = writing_component_sum(rows)
     rows["writing_component_sum"] = component_sum
     rows["writing_score_matches_components"] = (
-        pd.to_numeric(rows["writing_structure_score"], errors="coerce").eq(component_sum)
+        pd.to_numeric(rows[WRITING_STRUCTURE_SCORE], errors="coerce").eq(component_sum)
     )
     factual_contributions = factual_component_contributions(rows)
     rows["factual_component_sum"] = factual_contributions.sum(
@@ -261,10 +280,13 @@ def build_artifacts(repo: Path, output_dir: Path) -> dict[str, Any]:
         "prompt_id", "normalized_url", "source_url", "source_root_domain", "cited",
         "content_strength", "scrape_success", "content_quality_flag", "word_count",
         "log2_word_count_plus1", "has_verified_html_table", "factual_numeric_density_score",
-        "writing_structure_score", *FACTUAL_COMPONENTS, *COMPONENTS,
+        WRITING_STRUCTURE_SCORE, *FACTUAL_COMPONENTS, *COMPONENTS,
+        *GEMINI_SEMANTIC_FOCAL, "gemini_status", "gemini_semantic_measured",
         "opening_100_words", "text_source_used",
         "feature_extraction_text_scope", "text_feature_available", "heading_count_group",
-        "writing_component_sum",
+        "writing_component_sum", "writing_structure_components_measured_n",
+        "writing_structure_score_v3_available", "list_structure_measurement_source",
+        "main_content_unordered_list_evidence", "main_content_ordered_list_evidence",
         "writing_score_matches_components", "factual_component_sum",
         "factual_score_matches_components", "suspicious_measurement",
         "page_type_family_gemini_v1_collapsed", "source_type_general_gemini_v1_collapsed",
@@ -279,6 +301,28 @@ def build_artifacts(repo: Path, output_dir: Path) -> dict[str, Any]:
         "full_page_text_available", "limited_excerpt_only",
     ]
     content = assembly[content_columns].copy()
+    content = content.merge(
+        document[
+            [
+                "normalized_url",
+                "main_content_extraction_method",
+                "list_structure_measurement_source",
+                "main_content_unordered_list_evidence",
+                "main_content_ordered_list_evidence",
+                "generated_markdown_path",
+            ]
+        ],
+        on="normalized_url",
+        how="left",
+        validate="many_to_one",
+    )
+    content["generated_markdown_evidence"] = content["generated_markdown_path"].map(
+        lambda value: (
+            Path(str(value)).read_text(encoding="utf-8")[:12000]
+            if pd.notna(value) and str(value).strip() and Path(str(value)).exists()
+            else ""
+        )
+    )
     snapshot_root = package.parent / "tables/area_condo_brightdata_content_pilot/normalized"
     snapshot_fields = []
     for source in content["source_url"].fillna(content["normalized_url"]).astype(str):
@@ -310,7 +354,14 @@ def build_artifacts(repo: Path, output_dir: Path) -> dict[str, Any]:
         "artifact_version": ARTIFACT_VERSION,
         "created_at": utc_now(),
         "validated": True,
-        "producer_versions": [CONTENT_TRANSFORM_VERSION, DOCUMENT_VERSION, WRITING_VERSION, TAXONOMY_VERSION],
+        "producer_versions": [
+            CONTENT_TRANSFORM_VERSION,
+            DOCUMENT_VERSION,
+            WRITING_VERSION,
+            WRITING_STRUCTURE_VERSION,
+            TAXONOMY_VERSION,
+            GEMINI_SEMANTIC_VERSION,
+        ],
         "authoritative_content_field": "authoritative_feature_content",
         "authoritative_content_source_field": "authoritative_content_source",
         "files": {
@@ -322,7 +373,8 @@ def build_artifacts(repo: Path, output_dir: Path) -> dict[str, Any]:
         "warnings": [
             "Stored feature content is authoritative; live webpages may have changed.",
             "HTML preview is sanitized, script-free, and capped for frontend QA.",
-            "The historical writing producer usually used a 3,000-character preview plus title/meta, not the full body.",
+            "List indicators use filtered main-content HTML, with generated Markdown only when HTML is unavailable.",
+            "The v3 score is NA unless all five governed components are measured.",
         ],
     }
     manifest_path = output_dir / "manual_feature_validation_manifest.json"

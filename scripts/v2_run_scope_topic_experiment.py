@@ -453,9 +453,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ai-json", default="/Users/pmootr/Downloads/sd_mreoachd2kf31omlko.json")
-    ap.add_argument("--manifest", default="/Users/pmootr/Downloads/scope_condo_nonbranded_prompt_manifest_100.csv")
-    ap.add_argument("--brightdata-input", default="/Users/pmootr/Downloads/scope_condo_nonbranded_brightdata_input_100.csv")
+    # No defaults: these pointed at one machine's Downloads folder, which
+    # silently produced "file not found" for anyone else.
+    ap.add_argument("--ai-json", required=True,
+                    help="Bright Data ChatGPT export (JSON)")
+    ap.add_argument("--manifest", required=True,
+                    help="prompt manifest CSV")
+    ap.add_argument("--brightdata-input", required=True,
+                    help="Bright Data input CSV used to produce the export")
     ap.add_argument("--actor-id", default=DEFAULT_ACTOR_ID)
     ap.add_argument("--max-urls", type=int, default=None)
     ap.add_argument("--dry-run", action="store_true")

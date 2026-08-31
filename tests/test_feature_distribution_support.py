@@ -30,13 +30,18 @@ def _sample_rows() -> pd.DataFrame:
                 "log2_word_count_plus1": length,
                 "has_verified_html_table": table,
                 "factual_numeric_density_score": factual,
-                "writing_structure_score": writing,
-                "has_bullet_list": [0, 1, 0, 0, 1, 1][index],
-                "has_numbered_list": [0, 0, 0, 0, 0, 1][index],
+                "writing_structure_score_v3": min(writing, 5),
+                "has_main_content_unordered_list": [0, 1, 0, 0, 1, 1][index],
+                "has_main_content_ordered_list": [0, 0, 0, 0, 0, 1][index],
                 "has_faq_pattern": [0, 0, 1, 1, 0, 1][index],
-                "has_question_answer_structure": [0, 0, 1, 1, 0, 1][index],
                 "opening_has_summary_signal": [0, 1, 0, 0, 0, 1][index],
                 "opening_has_direct_answer_signal": [0, 0, 0, 0, 1, 1][index],
+                "has_direct_answer_gemini_v1": [0, 1, 0, 1, pd.NA, 1][index],
+                "has_definition_gemini_v1": [0, 0, 1, 0, pd.NA, 1][index],
+                "has_comparison_gemini_v1": [0, 1, 1, 0, pd.NA, 1][index],
+                "has_steps_gemini_v1": [0, 0, 0, 1, pd.NA, 1][index],
+                "has_numeric_evidence_gemini_v1": [1, 1, 0, 1, pd.NA, 1][index],
+                "has_question_heading_gemini_v1": [0, 1, 0, 0, pd.NA, 1][index],
             }
         )
     return pd.DataFrame(rows)
@@ -57,10 +62,10 @@ def test_binary_distribution_distinguishes_zero_one_and_missing():
     assert distribution["n_rows"].sum() == 6
 
 
-def test_writing_score_distribution_includes_zero_through_six_and_na():
-    distribution = support.distribution_table(_sample_rows(), "writing_structure_score")
+def test_writing_score_distribution_includes_zero_through_five_and_na():
+    distribution = support.distribution_table(_sample_rows(), "writing_structure_score_v3")
 
-    assert distribution["bin_label"].tolist() == ["0", "1", "2", "3", "4", "5", "6", "NA"]
+    assert distribution["bin_label"].tolist() == ["0", "1", "2", "3", "4", "5", "NA"]
     assert distribution.loc[distribution["bin_label"].eq("0"), "n_rows"].iloc[0] == 1
     assert distribution.loc[distribution["bin_label"].eq("3"), "n_rows"].iloc[0] == 0
     assert distribution.loc[distribution["bin_label"].eq("NA"), "n_rows"].iloc[0] == 0
@@ -68,7 +73,7 @@ def test_writing_score_distribution_includes_zero_through_six_and_na():
 
 def test_distribution_outcome_counts_match_stored_citation_status():
     frame = _sample_rows()
-    distribution = support.distribution_table(frame, "writing_structure_score")
+    distribution = support.distribution_table(frame, "writing_structure_score_v3")
 
     assert distribution["cited_rows"].sum() == int(frame["cited"].sum())
     assert distribution["more_only_rows"].sum() == int(frame["cited"].eq(0).sum())

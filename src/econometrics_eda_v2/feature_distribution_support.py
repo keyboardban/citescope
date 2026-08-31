@@ -15,16 +15,25 @@ import pandas as pd
 from src.econometrics_eda_v2.manual_feature_validation import COMPONENTS
 
 
-ARTIFACT_VERSION = "feature_distribution_support_v1"
+ARTIFACT_VERSION = "feature_distribution_support_v4_gemini_semantic"
+GEMINI_SEMANTIC_FEATURES = (
+    "has_direct_answer_gemini_v1",
+    "has_definition_gemini_v1",
+    "has_comparison_gemini_v1",
+    "has_steps_gemini_v1",
+    "has_numeric_evidence_gemini_v1",
+    "has_question_heading_gemini_v1",
+)
 FOCAL_FEATURES = (
     "log2_word_count_plus1",
     "has_verified_html_table",
     "factual_numeric_density_score",
-    "writing_structure_score",
+    "writing_structure_score_v3",
+    *GEMINI_SEMANTIC_FEATURES,
 )
-BINARY_FEATURES = ("has_verified_html_table", *COMPONENTS)
+BINARY_FEATURES = ("has_verified_html_table", *GEMINI_SEMANTIC_FEATURES, *COMPONENTS)
 CONTINUOUS_FEATURES = ("log2_word_count_plus1", "factual_numeric_density_score")
-SCORE_FEATURES = ("writing_structure_score",)
+SCORE_FEATURES = ("writing_structure_score_v3",)
 CATEGORICAL_FEATURES = ("content_strength",)
 OPTIONAL_DIAGNOSTICS = ("heading_count_group",)
 DASHBOARD_FEATURES = (*FOCAL_FEATURES, "content_strength", *COMPONENTS, *OPTIONAL_DIAGNOSTICS)
@@ -32,12 +41,17 @@ FEATURE_LABELS = {
     "log2_word_count_plus1": "Measured Content Length (log2)",
     "has_verified_html_table": "Verified HTML Table Presence",
     "factual_numeric_density_score": "Factual and Numeric Specificity Score",
-    "writing_structure_score": "Answer-Oriented Writing Structure Score",
+    "writing_structure_score_v3": "Answer-Oriented Writing Structure Score v3",
+    "has_direct_answer_gemini_v1": "Direct Answer Presence (Gemini)",
+    "has_definition_gemini_v1": "Definition Presence (Gemini)",
+    "has_comparison_gemini_v1": "Comparison Content Presence (Gemini)",
+    "has_steps_gemini_v1": "Step-by-Step Structure Presence (Gemini)",
+    "has_numeric_evidence_gemini_v1": "Numeric Evidence Presence (Gemini)",
+    "has_question_heading_gemini_v1": "Question Heading Presence (Gemini)",
     "content_strength": "Extraction Strength",
-    "has_bullet_list": "Bullet List Detected",
-    "has_numbered_list": "Numbered List Detected",
+    "has_main_content_unordered_list": "Main-Content Unordered List",
+    "has_main_content_ordered_list": "Main-Content Ordered List",
     "has_faq_pattern": "FAQ Pattern Detected",
-    "has_question_answer_structure": "Question-Answer Structure Detected",
     "opening_has_summary_signal": "Opening Summary Signal",
     "opening_has_direct_answer_signal": "Opening Direct-Answer Signal",
     "heading_count_group": "Heading Count Group (D0/QA only)",
@@ -98,7 +112,7 @@ def feature_bins(frame: pd.DataFrame, feature: str) -> pd.DataFrame:
         numeric = _numeric(frame, feature)
         result["bin_key"] = numeric.map(lambda value: f"score_{int(value)}" if pd.notna(value) else "unmeasured")
         result["bin_label"] = numeric.map(lambda value: str(int(value)) if pd.notna(value) else "NA")
-        result["bin_order"] = numeric.fillna(7)
+        result["bin_order"] = numeric.fillna(6)
         result["bin_low"] = numeric
         result["bin_high"] = numeric
         return result
@@ -282,10 +296,10 @@ def distribution_table(frame: pd.DataFrame, feature: str) -> pd.DataFrame:
                 }
             )
         output = pd.concat([output, pd.DataFrame(empty_rows)], ignore_index=True)
-    if feature == "writing_structure_score":
+    if feature == "writing_structure_score_v3":
         existing = set(output["bin_key"]) if not output.empty else set()
         empty_rows = []
-        for score in range(7):
+        for score in range(6):
             key = f"score_{score}"
             if key not in existing:
                 empty_rows.append(
@@ -314,7 +328,7 @@ def distribution_table(frame: pd.DataFrame, feature: str) -> pd.DataFrame:
                     "feature_type": "score",
                     "bin_key": "unmeasured",
                     "bin_label": "NA",
-                    "bin_order": 7,
+                    "bin_order": 6,
                     "n_rows": 0,
                     "percentage_all_rows": 0.0,
                     "percentage_measured_rows": np.nan,
@@ -401,7 +415,10 @@ def feature_summary(frame: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "feature_name": feature,
-                "feature_label": FEATURE_LABELS[feature],
+                "feature_label": FEATURE_LABELS.get(
+                    feature,
+                    feature.replace("_", " ").strip().title(),
+                ),
                 "feature_type": kind,
                 "model_role": (
                     "focal_predictor" if feature in FOCAL_FEATURES
@@ -456,7 +473,7 @@ def build_support_artifacts(
         ignore_index=True,
     )
     within_rows = []
-    for feature in FOCAL_FEATURES:
+    for feature in DASHBOARD_FEATURES:
         row = prompt_variation(review_rows, feature)
         row.pop("_varying_prompts")
         within_rows.append(row)

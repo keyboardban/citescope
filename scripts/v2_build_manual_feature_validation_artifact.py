@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO_ROOT / "outputs/econometrics_redesign_v2_20260722/frontend",
+        default=REPO_ROOT / "outputs/econometrics_redesign_v4_20260803_gemini_semantic_features/frontend",
     )
     args = parser.parse_args()
     output_dir = args.output_dir.resolve()

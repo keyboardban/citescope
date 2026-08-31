@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import textwrap
 
 import pandas as pd
 
@@ -67,6 +68,10 @@ def test_html_first_extractor_preserves_requested_structure():
     assert features["unordered_list_count"] == 1
     assert features["ordered_list_count"] == 1
     assert features["list_item_count"] == 3
+    assert features["has_main_content_unordered_list"] == 1
+    assert features["has_main_content_ordered_list"] == 0
+    assert features["list_structure_measurement_source"] == "filtered_main_content_html"
+    assert "Swimming pool" in features["main_content_unordered_list_evidence"]
     assert features["internal_link_count"] == 1
     assert features["outbound_link_count"] == 1
     assert features["external_link_domains"] == "example.org"
@@ -87,8 +92,56 @@ def test_missing_html_keeps_structure_missing_instead_of_zero():
     assert features["structure_features_available"] == 0
     assert pd.isna(features["html_table_count"])
     assert features["text_available"] == 1
+    assert pd.isna(features["has_main_content_unordered_list"])
+    assert pd.isna(features["has_main_content_ordered_list"])
+    assert features["list_structure_measurement_source"] == "unmeasured"
     assert texts["main_content_text"] == "Fallback text"
     assert texts["generated_markdown"] == ""
+
+
+def test_structured_list_detector_excludes_chrome_hidden_and_one_item_lists():
+    html = """
+    <html><body>
+      <nav><ul><li>Home</li><li>About</li></ul></nav>
+      <main>
+        <ul><li>Only one content item</li></ul>
+        <ol><li>First</li><li hidden>Hidden second</li></ol>
+        <div class="related-links"><ul><li>Related A</li><li>Related B</li></ul></div>
+      </main>
+      <div class="cookie-banner"><ul><li>Accept</li><li>Reject</li></ul></div>
+    </body></html>
+    """
+
+    features, _ = extract_document_structure(html, "https://example.com/page")
+
+    assert features["has_main_content_unordered_list"] == 0
+    assert features["has_main_content_ordered_list"] == 0
+    assert features["main_content_unordered_list_evidence"] == "[]"
+    assert features["main_content_ordered_list_evidence"] == "[]"
+
+
+def test_generated_markdown_is_the_only_non_html_list_fallback():
+    markdown = """
+    Introductory text.
+
+    - First point
+    - Second point
+
+    1. First step
+    2. Second step
+    """
+
+    features, texts = extract_document_structure(
+        "",
+        "https://example.com/page",
+        fallback_text="- a plain-text line must not be inspected",
+        fallback_markdown=textwrap.dedent(markdown),
+    )
+
+    assert features["has_main_content_unordered_list"] == 1
+    assert features["has_main_content_ordered_list"] == 1
+    assert features["list_structure_measurement_source"] == "generated_markdown_fallback"
+    assert texts["generated_markdown"] == textwrap.dedent(markdown).strip()
 
 
 def test_document_structure_runner_writes_url_and_row_outputs(tmp_path):

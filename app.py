@@ -8,7 +8,7 @@ from src import config, storage
 from src import econometrics_qa as qa_data
 from ui.state import init_state
 from ui.theme import inject_css
-from ui.views import chatgpt, econometrics_qa
+from ui.views import chatgpt, econometrics_qa, position_model_new
 
 st.set_page_config(
     page_title="CiteScope ChatGPT Content Audit",
@@ -21,7 +21,7 @@ inject_css()
 config.ensure_dirs()
 init_state()
 
-MODES = ["ChatGPT Bright Data Audit", "Content Econometrics QA"]
+MODES = ["ChatGPT Bright Data Audit", "Content Econometrics QA", "Position Model — New"]
 
 
 def _clear_cg() -> None:
@@ -49,7 +49,7 @@ def _sidebar() -> tuple[str, str, str]:
                 width="stretch",
                 on_click=_open_previous_area_condo,
             )
-        else:
+        elif mode == MODES[1]:
             st.caption("Inspect scrape quality, prompts, taxonomy, and econometric outputs.")
             preset = qa_data.previous_area_condo_preset()
             data_source = st.selectbox(
@@ -77,7 +77,7 @@ def _sidebar() -> tuple[str, str, str]:
 
         st.divider()
         st.markdown("**Scraping credentials** _(from `.env`)_")
-        for name in ("BRIGHTDATA_API_KEY", "APIFY_TOKEN"):
+        for name in ("BRIGHTDATA_API_KEY", "APIFY_TOKEN", "GEMINI_API_KEY"):
             ok = config.secret_present(name)
             st.markdown(("Available: " if ok else "Missing: ") + f"`{name}`")
         st.caption("The QA explorer is read-only and does not spend scraping credits.")
@@ -103,9 +103,11 @@ def _sidebar() -> tuple[str, str, str]:
                             st.rerun()
                 else:
                     st.caption("No saved Bright Data runs yet.")
-        else:
+        elif mode == MODES[1]:
             st.caption("Econometrics data is resolved through `CITESCOPE_RESEARCH_DATA_DIR`.")
             st.caption(f"Manual reviews: {len(storage.list_econometrics_reviews()):,}")
+        else:
+            st.caption("Separate position-focused M0-M6 outputs; read-only and isolated from D0-FE4.")
 
         with st.expander("Cache and local data"):
             st.caption(f"DB: `{config.DB_PATH.name}` · exports: `data/exports/`")
@@ -127,8 +129,10 @@ def main() -> None:
     try:
         if mode == MODES[0]:
             chatgpt.render()
-        else:
+        elif mode == MODES[1]:
             econometrics_qa.render(package_dir, prompt_manifest_path)
+        else:
+            position_model_new.render()
     except Exception as exc:  # keep the app alive; show the error in-page
         st.error(f"Something went wrong rendering **{mode}**: {type(exc).__name__}: {exc}")
         with st.expander("Traceback"):

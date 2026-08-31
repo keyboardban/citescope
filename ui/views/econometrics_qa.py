@@ -18,8 +18,20 @@ from src import econometrics_qa as qa
 from src import storage
 from src.econometrics_eda_v2 import feature_distribution_support as feature_support
 from src.econometrics_eda_v2 import manual_feature_validation as feature_qa
+from src.econometrics_eda_v2.gemini_position_features import build_page_feature_scorecard
 
 from .. import components as C
+
+
+VERIFIED_TABLE_DIAGNOSTIC_RELATIVE_DIR = Path(
+    "outputs/econometrics_redesign_v4_20260803_gemini_semantic_features/"
+    "diagnostics/has_verified_html_table_20260727"
+)
+POSITION_FEATURE_EDA_RELATIVE_DIR = Path("outputs/position_feature_eda_final_20260731")
+POSITION_FEATURE_EDA_URL = "http://localhost:8503/"
+GEMINI_POSITION_SMOKE_DATA_RELATIVE_DIR = Path(
+    "outputs/position_feature_eda_final_20260731/frontend/data"
+)
 
 
 @st.cache_data(show_spinner="Loading validated econometrics package...")
@@ -28,7 +40,7 @@ def _load_bundle(
     prompt_manifest_path: str,
     gemini_taxonomy_path: str,
     gemini_taxonomy_mtime: float,
-    taxonomy_version: str = qa.GENERAL_TAXONOMY_VERSION,
+    taxonomy_version: str = qa.QA_TAXONOMY_CACHE_VERSION,
 ) -> qa.QABundle:
     del taxonomy_version, gemini_taxonomy_mtime
     return qa.load_bundle(
@@ -60,6 +72,21 @@ def _load_feature_support_artifacts(
 ) -> tuple[dict[str, pd.DataFrame], dict]:
     del manifest_mtime
     return feature_support.load_support_artifacts(Path(manifest_path))
+
+
+@st.cache_data(show_spinner="Loading verified-table diagnostics...")
+def _load_verified_table_diagnostics(
+    diagnostic_dir: str,
+    manifest_mtime: float,
+) -> tuple[dict[str, pd.DataFrame], dict]:
+    del manifest_mtime
+    root = Path(diagnostic_dir)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    tables = {
+        path.stem: pd.read_csv(path)
+        for path in sorted((root / "tables").glob("*.csv"))
+    }
+    return tables, manifest
 
 
 def _snapshot_root(bundle: qa.QABundle) -> Path:
@@ -99,7 +126,23 @@ def _label_value(row: pd.Series, column: str, fallback: str = "unknown") -> str:
 
 def _taxonomy_comparison(row: pd.Series, *, heading: str = "Classification check") -> None:
     """Show deterministic, LLM, and historical labels next to the live page."""
+    source_share = pd.to_numeric(
+        pd.Series([row.get("source_type_domain_dominant_url_share")]), errors="coerce"
+    ).iloc[0]
+    source_confidence = (
+        f"{source_share:.0%} domain URL agreement" if pd.notna(source_share) else "not available"
+    )
+    if bool(row.get("source_type_domain_top_class_tie")) if pd.notna(row.get("source_type_domain_top_class_tie")) else False:
+        source_confidence += "; exact tie assigned to other_or_unknown"
     records = [
+        {
+            "Layer": "Current model controls (6-class)",
+            "Page type": _label_value(row, "page_type_model_6"),
+            "Page family": _label_value(row, "page_type_detailed"),
+            "Source / site type": _label_value(row, "source_type_model_6"),
+            "Confidence": source_confidence,
+            "Basis": "deterministic page collapse; unique-URL modal source class per domain",
+        },
         {
             "Layer": "Rule v2",
             "Page type": _label_value(row, "page_type_general_rule_v2"),
@@ -250,6 +293,8 @@ def render(package_dir: str = "", prompt_manifest_path: str = "") -> None:
             "Taxonomy",
             "Taxonomy analysis",
             "Econometrics",
+            "Position Feature EDA",
+            "Verified table diagnostics",
             "Feature validation",
             "Reviews",
         ]
@@ -267,9 +312,570 @@ def render(package_dir: str = "", prompt_manifest_path: str = "") -> None:
     with tabs[5]:
         _econometrics(bundle)
     with tabs[6]:
-        _feature_validation(bundle)
+        _position_feature_eda()
     with tabs[7]:
+        _verified_table_diagnostics()
+    with tabs[8]:
+        _feature_validation(bundle)
+    with tabs[9]:
         _reviews()
+
+
+def _position_feature_eda() -> None:
+    C.section(
+        "Position Feature EDA",
+        "Explore feature coverage, page position, citation-rate patterns, domain variation, and model readiness.",
+    )
+    repo = Path(__file__).resolve().parents[2]
+    output_dir = repo / POSITION_FEATURE_EDA_RELATIVE_DIR
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.exists():
+        st.warning("The position-feature EDA artifacts have not been built in this workspace.")
+        st.code(
+            ".venv/bin/python scripts/v2_run_position_feature_eda.py",
+            language="bash",
+        )
+        return
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        st.error(f"Could not read the position-feature EDA manifest: {type(exc).__name__}: {exc}")
+        return
+
+    C.metric_cards(
+        [
+            {"value": f"{int(manifest.get('rows', 0)):,}", "label": "source-prompt rows"},
+            {"value": f"{int(manifest.get('unique_urls', 0)):,}", "label": "unique URLs"},
+            {"value": f"{int(manifest.get('domains', 0)):,}", "label": "domains"},
+            {"value": f"{float(manifest.get('citation_rate', 0)):.1%}", "label": "citation rate"},
+        ]
+    )
+    st.warning(
+        "This is descriptive EDA among surfaced sources. It does not estimate a new LPM "
+        "and does not support causal interpretation."
+    )
+    _gemini_position_detection_qa(repo / GEMINI_POSITION_SMOKE_DATA_RELATIVE_DIR)
+    actions = st.columns([1, 3])
+    actions[0].link_button(
+        "Open full dashboard",
+        POSITION_FEATURE_EDA_URL,
+        width="stretch",
+    )
+    actions[1].caption(
+        "The embedded dashboard is served locally on port 8503 and keeps its own filters and downloads."
+    )
+    st.iframe(POSITION_FEATURE_EDA_URL, height=960)
+
+
+def _gemini_position_detection_qa(data_dir: Path) -> None:
+    manifest_path = data_dir / "gemini_position_smoke_manifest.json"
+    progress_path = data_dir / "gemini_position_full_run_progress.json"
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+
+    st.subheader("Gemini semantic detection QA")
+    st.caption(
+        "Gemini classifies filtered main-content blocks without citation outcomes, answer text, "
+        "ranks, source positions, domain citation statistics, or rule-detector labels."
+    )
+    progress: dict = {}
+    if progress_path.exists():
+        try:
+            progress = json.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            progress = {}
+    if progress.get("status") == "running":
+        processed = int(progress.get("processed_urls", 0))
+        total = int(progress.get("total_urls", 0))
+        st.info(
+            f"Full Gemini run in progress: {processed:,}/{total:,} pages | "
+            f"{int(progress.get('successful_urls', 0)):,} successful | "
+            f"{int(progress.get('failed_urls', 0)):,} failed"
+        )
+        st.progress(processed / total if total else 0.0)
+    if (
+        progress.get("status") != "running"
+        and manifest.get("status") in {"live_smoke_complete", "live_full_complete"}
+    ):
+        st.success("Bounded live smoke test complete. Outputs remain QA-only.")
+    else:
+        st.warning("Dry-run artifacts are ready, but no live Gemini detections are available.")
+
+    model_display = (
+        str(manifest.get("model", "unknown"))
+        .removeprefix("gemini-")
+        .replace("-", " ")
+        .title()
+    )
+    compact_model_display = "Flash Lite" if "Flash Lite" in model_display else model_display
+    C.metric_cards(
+        [
+            {"value": f"{int(manifest.get('sample_urls', 0)):,}", "label": "sample pages"},
+            {"value": f"{int(manifest.get('successful_urls', 0)):,}", "label": "successful pages"},
+            {"value": f"{int(manifest.get('input_tokens', 0)):,}", "label": "input tokens"},
+            {"value": f"{int(manifest.get('output_tokens', 0)):,}", "label": "output tokens"},
+            {"value": compact_model_display, "label": "model"},
+        ]
+    )
+    st.caption(f"Model ID: `{manifest.get('model', 'unknown')}`")
+
+    agreement_path = data_dir / "gemini_position_feature_agreement.csv"
+    pages_path = data_dir / "gemini_position_smoke_pages.csv"
+    evidence_path = data_dir / "gemini_position_detection_evidence.csv"
+    try:
+        agreement = pd.read_csv(agreement_path, low_memory=False)
+        pages = pd.read_csv(pages_path, low_memory=False)
+        evidence = pd.read_csv(evidence_path, low_memory=False)
+    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return
+
+    if not agreement.empty and pd.to_numeric(
+        agreement.get("comparable_pages"), errors="coerce"
+    ).fillna(0).gt(0).any():
+        comparison = agreement.melt(
+            id_vars=["feature", "comparable_pages"],
+            value_vars=["rule_positive_pages", "gemini_positive_pages"],
+            var_name="detector",
+            value_name="positive_pages",
+        )
+        comparison["detector"] = comparison["detector"].map(
+            {
+                "rule_positive_pages": "Rule based",
+                "gemini_positive_pages": "Gemini",
+            }
+        )
+        figure = px.bar(
+            comparison,
+            x="feature",
+            y="positive_pages",
+            color="detector",
+            barmode="group",
+            text="positive_pages",
+            color_discrete_map={"Rule based": "#D55E00", "Gemini": "#009E73"},
+            title="Rule versus Gemini positive detections in the smoke sample",
+        )
+        figure.update_layout(legend_title_text="Detector")
+        st.plotly_chart(figure, width="stretch")
+        st.dataframe(agreement, width="stretch", hide_index=True)
+        st.info(
+            "Agreement is not accuracy. Human evidence review is required before a Gemini field "
+            "can replace a rule detector or enter D0 or FE1-FE4."
+        )
+
+    with st.expander("Execution quality and detected evidence"):
+        if not pages.empty:
+            page_columns = [
+                "source_url", "source_root_domain", "gemini_status", "gemini_error",
+                "selected_blocks", "blocks_truncated", "chunks_total", "input_tokens",
+                "output_tokens",
+            ]
+            page_columns = [column for column in page_columns if column in pages]
+            st.dataframe(
+                pages[page_columns],
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "source_url": st.column_config.LinkColumn("Webpage", display_text="Open")
+                },
+            )
+        if not evidence.empty:
+            st.dataframe(
+                evidence,
+                width="stretch",
+                hide_index=True,
+                height=420,
+                column_config={
+                    "source_url": st.column_config.LinkColumn("Webpage", display_text="Open")
+                },
+            )
+
+    if not pages.empty and "source_url" in pages:
+        st.subheader("Live webpage evidence check")
+        review_pages = (
+            pages[["source_url", "normalized_url", "source_root_domain", "page_title"]]
+            .dropna(subset=["source_url"])
+            .drop_duplicates("source_url")
+        )
+        review_records = review_pages.to_dict("records")
+        selected_record = st.selectbox(
+            "Review page",
+            review_records,
+            format_func=lambda item: (
+                f"{item.get('source_root_domain', '')} | "
+                f"{str(item.get('page_title', '') or item.get('source_url', ''))[:90]}"
+            ),
+            key="gemini_position_live_review_page",
+        )
+        if selected_record:
+            source_url = str(selected_record["source_url"])
+            selected_url = str(selected_record.get("normalized_url") or source_url)
+            evidence_panel, webpage_panel = st.columns([1, 1.15])
+            with evidence_panel:
+                st.markdown("**Feature scores from the scraped snapshot**")
+                selected_evidence = evidence[
+                    evidence["source_url"].eq(source_url)
+                    | evidence["normalized_url"].eq(selected_url)
+                ].copy()
+                selected_page_rows = pages[
+                    pages["source_url"].eq(source_url)
+                    | pages["normalized_url"].eq(selected_url)
+                ]
+                if not selected_page_rows.empty:
+                    scorecard = build_page_feature_scorecard(
+                        selected_page_rows.iloc[0], selected_evidence
+                    )
+                    st.dataframe(scorecard, width="stretch", hide_index=True, height=255)
+                    st.caption(
+                        "Gemini score: 1 = detected, 0 = measured but not detected, "
+                        "NA = unmeasured. Confidence is categorical, not a probability."
+                    )
+                st.markdown("**Detected evidence blocks**")
+                if selected_evidence.empty:
+                    st.caption("Gemini did not return a positive semantic detection for this page.")
+                else:
+                    evidence_columns = [
+                        "feature", "block_id", "tag", "position_ratio", "confidence",
+                        "rationale", "evidence_text",
+                    ]
+                    evidence_columns = [
+                        column for column in evidence_columns if column in selected_evidence
+                    ]
+                    st.dataframe(
+                        selected_evidence[evidence_columns],
+                        width="stretch",
+                        hide_index=True,
+                        height=365,
+                    )
+            with webpage_panel:
+                st.markdown("**Current live webpage**")
+                st.link_button("Open webpage directly", selected_url, width="stretch")
+                st.iframe(selected_url, height=680)
+                st.caption(
+                    "Some websites block iframe embedding with browser security headers. "
+                    "Use the direct link when the embedded view is blank or refused."
+                )
+
+
+def _diagnostic_figure(
+    figure_dir: Path,
+    filename: str,
+    caption: str,
+) -> None:
+    path = figure_dir / filename
+    if path.exists():
+        st.image(str(path), caption=caption, width="stretch")
+    else:
+        st.warning(f"Missing figure: {filename}")
+
+
+def _download_diagnostic_table(name: str, frame: pd.DataFrame, *, key: str) -> None:
+    st.download_button(
+        f"Download {name}",
+        frame.to_csv(index=False).encode("utf-8"),
+        file_name=f"{name}.csv",
+        mime="text/csv",
+        key=key,
+    )
+
+
+def _verified_table_diagnostics() -> None:
+    C.section(
+        "Verified HTML table diagnostics",
+        "Explore prevalence, identifying variation, model attenuation, and manual detector QA.",
+    )
+    repo = Path(__file__).resolve().parents[2]
+    diagnostic_dir = repo / VERIFIED_TABLE_DIAGNOSTIC_RELATIVE_DIR
+    manifest_path = diagnostic_dir / "manifest.json"
+    if not manifest_path.exists():
+        st.warning("The focused verified-table diagnostic artifact has not been built.")
+        st.code(
+            ".venv/bin/python scripts/v2_diagnose_verified_html_table.py",
+            language="bash",
+        )
+        return
+
+    try:
+        tables, manifest = _load_verified_table_diagnostics(
+            str(diagnostic_dir),
+            manifest_path.stat().st_mtime,
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError, pd.errors.ParserError) as exc:
+        st.error(f"Could not load verified-table diagnostics: {type(exc).__name__}: {exc}")
+        return
+
+    overall = tables["overall_table_prevalence_and_cited_rates"]
+    positive = overall.loc[overall["table_status"].eq(1)].iloc[0]
+    decomposition = tables["FE2_FE3_table_decomposition"]
+    fe2 = decomposition.loc[decomposition["specification"].eq("FE2_full_sample")].iloc[0]
+    fe3 = decomposition.loc[
+        decomposition["specification"].eq("FE3_domain_FE_same_sample")
+    ].iloc[0]
+    C.metric_cards(
+        [
+            {"value": f"{int(manifest['n_rows']):,}", "label": "estimation rows"},
+            {"value": f"{int(manifest['n_prompts']):,}", "label": "prompts"},
+            {"value": f"{float(positive['row_share']):.1%}", "label": "table prevalence"},
+            {
+                "value": f"{float(positive['raw_cited_rate_difference_pp']):+.2f} pp",
+                "label": "raw cited-rate gap",
+            },
+            {"value": f"{float(fe2['estimate_pp']):+.2f} pp", "label": "FE2 estimate"},
+            {"value": f"{float(fe3['estimate_pp']):+.2f} pp", "label": "FE3 estimate"},
+        ]
+    )
+    st.info(
+        "The table association is suggestive, not causal. The FE2 estimate is borderline "
+        f"(p={float(fe2['p_value']):.3f}) and attenuates after restricting the sample and "
+        f"adding domain fixed effects (FE3 p={float(fe3['p_value']):.3f})."
+    )
+
+    views = st.tabs(
+        [
+            "Overview",
+            "Domains and prompts",
+            "Taxonomy and density",
+            "Stability",
+            "Detector QA",
+            "All data tables",
+        ]
+    )
+    figure_dir = diagnostic_dir / "figures"
+
+    with views[0]:
+        left, right = st.columns([1.25, 1])
+        with left:
+            _diagnostic_figure(
+                figure_dir,
+                "domain_table_prevalence_vs_cited_rate.png",
+                "Domain table prevalence and cited rate. Point size reflects domain rows.",
+            )
+        with right:
+            st.markdown("#### Overall cited rates")
+            st.dataframe(overall, width="stretch", hide_index=True)
+            st.markdown("#### Identifying support")
+            st.dataframe(
+                tables["identifying_support_summary"],
+                width="stretch",
+                hide_index=True,
+            )
+        st.markdown("#### FE2 to FE3 decomposition")
+        st.dataframe(decomposition, width="stretch", hide_index=True)
+        _download_diagnostic_table(
+            "FE2_FE3_table_decomposition",
+            decomposition,
+            key="download_verified_table_decomposition",
+        )
+
+    with views[1]:
+        domain_data = tables["domain_table_diagnostics"].copy()
+        domain_controls = st.columns([2, 1, 1])
+        domain_query = domain_controls[0].text_input(
+            "Filter domains",
+            placeholder="propertyhub.in.th",
+            key="verified_table_domain_search",
+        ).strip()
+        support_filter = domain_controls[1].selectbox(
+            "Within-domain support",
+            ["All", "Adequate only", "Inadequate only"],
+            key="verified_table_domain_support",
+        )
+        prevalence_options = sorted(
+            domain_data["prevalence_flag"].dropna().astype(str).unique().tolist()
+        )
+        prevalence_filter = domain_controls[2].multiselect(
+            "Prevalence",
+            prevalence_options,
+            key="verified_table_domain_prevalence",
+        )
+        if domain_query:
+            domain_data = domain_data[
+                domain_data["domain"].astype(str).str.contains(
+                    domain_query, case=False, na=False, regex=False
+                )
+            ]
+        if support_filter != "All":
+            wanted = support_filter == "Adequate only"
+            domain_data = domain_data[
+                domain_data["adequate_difference_support"].astype(bool).eq(wanted)
+            ]
+        if prevalence_filter:
+            domain_data = domain_data[
+                domain_data["prevalence_flag"].astype(str).isin(prevalence_filter)
+            ]
+        st.dataframe(domain_data, width="stretch", hide_index=True, height=420)
+        _download_diagnostic_table(
+            "filtered_domain_table_diagnostics",
+            domain_data,
+            key="download_verified_table_domains",
+        )
+
+        domain_figures = st.columns(2)
+        with domain_figures[0]:
+            _diagnostic_figure(
+                figure_dir,
+                "within_domain_table_differences.png",
+                "Within-domain cited-rate differences for domains with usable support.",
+            )
+        with domain_figures[1]:
+            _diagnostic_figure(
+                figure_dir,
+                "prompt_table_difference_distribution.png",
+                "Distribution of within-prompt table versus no-table cited-rate differences.",
+            )
+
+        st.markdown("#### Prompt-level diagnostics")
+        prompt_data = tables["prompt_table_diagnostics"]
+        prompt_support = st.checkbox(
+            "Show only prompts with adequate table/no-table support",
+            value=True,
+            key="verified_table_prompt_support",
+        )
+        if prompt_support:
+            prompt_data = prompt_data[
+                prompt_data["adequate_difference_support"].astype(bool)
+            ]
+        st.dataframe(prompt_data, width="stretch", hide_index=True, height=360)
+        _download_diagnostic_table(
+            "filtered_prompt_table_diagnostics",
+            prompt_data,
+            key="download_verified_table_prompts",
+        )
+
+    with views[2]:
+        taxonomy_figures = st.columns(2)
+        with taxonomy_figures[0]:
+            _diagnostic_figure(
+                figure_dir,
+                "table_prevalence_by_page_type.png",
+                "Verified-table prevalence by Gemini page-type family.",
+            )
+        with taxonomy_figures[1]:
+            _diagnostic_figure(
+                figure_dir,
+                "factual_density_by_table_cited_rates.png",
+                "Cited rates by factual-density quartile and verified-table status.",
+            )
+        taxonomy_level = st.selectbox(
+            "Taxonomy breakdown",
+            ["Page type", "Source type"],
+            key="verified_table_taxonomy_level",
+        )
+        taxonomy_table = (
+            tables["page_type_table_stratification"]
+            if taxonomy_level == "Page type"
+            else tables["source_type_table_stratification"]
+        )
+        st.dataframe(taxonomy_table, width="stretch", hide_index=True, height=420)
+        _download_diagnostic_table(
+            f"{taxonomy_level.casefold().replace(' ', '_')}_table_stratification",
+            taxonomy_table,
+            key="download_verified_table_taxonomy",
+        )
+        st.markdown("#### Table and factual-density relationship")
+        st.dataframe(
+            tables["table_factual_density_correlation"],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with views[3]:
+        _diagnostic_figure(
+            figure_dir,
+            "leave_one_domain_out_FE2_tables.png",
+            "FE2 estimate after excluding each influential table-heavy domain.",
+        )
+        lodo = tables["leave_one_domain_out_FE2"]
+        st.dataframe(lodo, width="stretch", hide_index=True)
+        _download_diagnostic_table(
+            "leave_one_domain_out_FE2",
+            lodo,
+            key="download_verified_table_lodo",
+        )
+        st.markdown("#### URL repetition")
+        st.dataframe(
+            tables["url_repetition_table_cited_rates"],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with views[4]:
+        st.markdown("#### Manual detector review summary")
+        st.dataframe(
+            tables["table_detector_qa_summary"],
+            width="stretch",
+            hide_index=True,
+        )
+        qa_rows = tables["table_detector_qa_sample"].copy()
+        qa_controls = st.columns(3)
+        stratum_options = sorted(qa_rows["qa_stratum"].dropna().astype(str).unique())
+        selected_strata = qa_controls[0].multiselect(
+            "QA stratum",
+            stratum_options,
+            default=stratum_options,
+            key="verified_table_qa_stratum",
+        )
+        classification_options = sorted(
+            qa_rows["detected_table_classification"].dropna().astype(str).unique()
+        )
+        selected_classes = qa_controls[1].multiselect(
+            "Review classification",
+            classification_options,
+            key="verified_table_qa_classification",
+        )
+        agreement = qa_controls[2].selectbox(
+            "Detector agreement",
+            ["All", "Agrees", "Disagrees"],
+            key="verified_table_qa_agreement",
+        )
+        if selected_strata:
+            qa_rows = qa_rows[qa_rows["qa_stratum"].astype(str).isin(selected_strata)]
+        if selected_classes:
+            qa_rows = qa_rows[
+                qa_rows["detected_table_classification"].astype(str).isin(selected_classes)
+            ]
+        if agreement != "All":
+            qa_rows = qa_rows[
+                qa_rows["detector_agreement"].astype(bool).eq(agreement == "Agrees")
+            ]
+        st.dataframe(
+            qa_rows,
+            width="stretch",
+            hide_index=True,
+            height=460,
+            column_config={
+                "source_url": st.column_config.LinkColumn("Webpage", display_text="Open"),
+            },
+        )
+        _download_diagnostic_table(
+            "filtered_table_detector_qa_sample",
+            qa_rows,
+            key="download_verified_table_qa",
+        )
+        st.caption(
+            "The evidence excerpt comes from stored scrape material. Open the webpage to "
+            "check the current live page; differences may reflect scrape-version drift."
+        )
+
+    with views[5]:
+        table_names = sorted(tables)
+        selected_table = st.selectbox(
+            "Diagnostic table",
+            table_names,
+            key="verified_table_all_table_selector",
+        )
+        selected_frame = tables[selected_table]
+        st.caption(f"{len(selected_frame):,} rows | {len(selected_frame.columns):,} columns")
+        st.dataframe(selected_frame, width="stretch", hide_index=True, height=560)
+        _download_diagnostic_table(
+            selected_table,
+            selected_frame,
+            key="download_verified_table_selected",
+        )
 
 
 def _overview(bundle: qa.QABundle) -> None:
@@ -643,9 +1249,13 @@ def _prompt_explorer(bundle: qa.QABundle) -> None:
 def _taxonomy_explorer(bundle: qa.QABundle) -> None:
     C.section(
         "Taxonomy explorer",
-        "Rule v2 is the current deterministic preview. Historical labels remain available for model reproducibility.",
+        "Approved six-class controls are the current model taxonomy. Detailed Gemini, Rule-v2, and historical labels remain available for QA.",
     )
     feature_labels = {
+        "page_type_model_6": "Current model control: page type (6 classes)",
+        "source_type_model_6": "Current model control: source type (6 classes)",
+        "page_type_detailed": "Current evidence: detailed page family",
+        "source_type_detailed": "Current evidence: detailed source type",
         "page_type_url_seed_general_rule_v2": "Rule v2: URL-seed page type",
         "page_type_general_rule_v2": "Rule v2: final detailed page type",
         "page_type_family_general_rule_v2": "Rule v2: final page family",
@@ -658,19 +1268,21 @@ def _taxonomy_explorer(bundle: qa.QABundle) -> None:
     }
     if "llm_page_type_general" in bundle.url_evidence:
         feature_labels = {
+            **feature_labels,
             "llm_page_type_general": "Gemini: detailed page type",
             "llm_page_type_family_general": "Gemini: page family",
             "llm_site_type_general": "Gemini: source / site type",
             "llm_confidence": "Gemini: confidence",
-            **feature_labels,
         }
     feature = st.selectbox(
         "Taxonomy level",
         list(feature_labels),
-        key="qa_taxonomy_feature",
+        key="qa_taxonomy_feature_model6_v1",
         format_func=feature_labels.get,
     )
     evidence = bundle.url_evidence.copy()
+    if not {"page_type_model_6", "source_type_model_6"}.issubset(evidence.columns):
+        evidence = qa.add_governed_taxonomy_6(evidence)
     evidence[feature] = evidence[feature].fillna("unknown").astype(str)
     distribution = (
         evidence.groupby(feature, dropna=False)
@@ -696,7 +1308,11 @@ def _taxonomy_explorer(bundle: qa.QABundle) -> None:
     fig.update_layout(height=max(420, len(distribution) * 34), yaxis_title=None, xaxis_title="Unique URLs")
     fig.update_coloraxes(colorbar_tickformat=".0%", colorbar_title="Cited rate")
     st.plotly_chart(fig, width="stretch")
-    selected = st.selectbox("Inspect category", distribution[feature].tolist(), key="qa_taxonomy_level")
+    selected = st.selectbox(
+        "Inspect category",
+        distribution[feature].tolist(),
+        key="qa_taxonomy_level_model6_v1",
+    )
     sample = evidence[evidence[feature].eq(selected)].sort_values(
         ["cited_appearances", "source_appearances"], ascending=False
     )
@@ -731,7 +1347,7 @@ def _taxonomy_explorer(bundle: qa.QABundle) -> None:
     selected_source_label = st.selectbox(
         "Taxonomy source webpage",
         list(source_labels),
-        key="qa_taxonomy_source_page",
+        key="qa_taxonomy_source_page_model6_v1",
     )
     selected_normalized = source_labels[selected_source_label]
     source = source_rows[source_rows["normalized_url"].astype(str).eq(selected_normalized)].iloc[0]
@@ -747,10 +1363,99 @@ def _taxonomy_explorer(bundle: qa.QABundle) -> None:
 
 def _taxonomy_analysis(bundle: qa.QABundle) -> None:
     C.section(
-        "Aggregate taxonomy comparison",
-        "Compare classifier agreement across URLs. Agreement is not accuracy until manual labels are available.",
+        "Taxonomy analysis",
+        "Review the approved six-class model controls first, then compare detailed classifier labels for QA.",
     )
     evidence = bundle.url_evidence.copy()
+    if not {"page_type_model_6", "source_type_model_6"}.issubset(evidence.columns):
+        evidence = qa.add_governed_taxonomy_6(evidence)
+    st.markdown("#### Current six-class model controls")
+    st.info(
+        "These are the taxonomy columns used as current model controls. Detailed Gemini labels "
+        "remain evidence fields and are not entered directly as the six-class controls."
+    )
+    taxonomy_columns = {
+        "Page type": "page_type_model_6",
+        "Source type": "source_type_model_6",
+    }
+    taxonomy_figures = st.columns(2, gap="large")
+    for container, (label, column) in zip(taxonomy_figures, taxonomy_columns.items()):
+        distribution = (
+            evidence.groupby(column, dropna=False)
+            .agg(
+                unique_urls=("normalized_url", "nunique"),
+                source_appearances=("source_appearances", "sum"),
+                cited_appearances=("cited_appearances", "sum"),
+            )
+            .reset_index()
+        )
+        distribution["cited_rate"] = (
+            distribution["cited_appearances"] / distribution["source_appearances"]
+        )
+        distribution = distribution.sort_values("unique_urls")
+        figure = px.bar(
+            distribution,
+            x="unique_urls",
+            y=column,
+            orientation="h",
+            color="cited_rate",
+            color_continuous_scale="Tealgrn",
+            text="unique_urls",
+            title=f"Current six-class {label.casefold()}",
+        )
+        figure.update_layout(
+            height=430,
+            yaxis_title=None,
+            xaxis_title="Unique URLs",
+            margin={"l": 190, "r": 30, "t": 65, "b": 40},
+        )
+        figure.update_coloraxes(colorbar_tickformat=".0%", colorbar_title="Cited rate")
+        container.plotly_chart(figure, width="stretch")
+
+    domain_rows = evidence.drop_duplicates("source_root_domain")
+    low_confidence = int(
+        domain_rows["source_type_domain_low_confidence"].fillna(False).astype(bool).sum()
+    )
+    exact_ties = int(
+        domain_rows["source_type_domain_top_class_tie"].fillna(False).astype(bool).sum()
+    )
+    C.metric_cards(
+        [
+            {"value": "6", "label": "page-type classes"},
+            {"value": "6", "label": "source-type classes"},
+            {"value": f"{low_confidence:,}", "label": "low-confidence source domains"},
+            {"value": f"{exact_ties:,}", "label": "exact-tie source domains"},
+        ]
+    )
+    with st.expander("Show six-class mappings and source-domain consensus QA"):
+        page_mapping, source_mapping = qa.governed_taxonomy_mapping_tables()
+        left, right = st.columns(2, gap="large")
+        left.markdown("**Page-type mapping**")
+        left.dataframe(page_mapping, width="stretch", hide_index=True)
+        right.markdown("**Source-type mapping before domain consensus**")
+        right.dataframe(source_mapping, width="stretch", hide_index=True)
+        st.caption(
+            "Source type uses the modal collapsed class across unique URLs in each domain. "
+            "Exact top-class ties become other_or_unknown; agreement below 60% is flagged."
+        )
+        domain_audit_columns = [
+            "source_root_domain",
+            "source_type_model_6",
+            "source_type_domain_dominant_label_before_tie",
+            "source_type_domain_dominant_url_share",
+            "source_type_domain_top_class_tie",
+            "source_type_domain_low_confidence",
+            "source_type_domain_unique_urls",
+            "source_type_domain_candidate_summary",
+        ]
+        domain_audit = domain_rows[domain_audit_columns].sort_values(
+            ["source_type_domain_low_confidence", "source_type_domain_unique_urls"],
+            ascending=[False, False],
+        )
+        st.dataframe(domain_audit, width="stretch", hide_index=True, height=420)
+
+    st.divider()
+    st.markdown("#### Detailed classifier comparison (QA only)")
     summary = qa.taxonomy_comparison_summary(evidence)
     if not summary:
         st.warning("The Gemini taxonomy artifact is not available for aggregate comparison.")
@@ -1035,7 +1740,7 @@ def _econometrics(bundle: qa.QABundle) -> None:
     )
 
     repo = Path(__file__).resolve().parents[2]
-    artifact_dir = repo / "outputs/econometrics_redesign_v2_20260722/frontend"
+    artifact_dir = repo / "outputs/econometrics_redesign_v4_20260803_gemini_semantic_features/frontend"
     manifest_path = artifact_dir / "manifest.json"
     if not manifest_path.exists():
         st.error(f"Validated econometrics artifact manifest is missing: {manifest_path}")
@@ -1085,7 +1790,13 @@ def _econometrics(bundle: qa.QABundle) -> None:
         "log2_word_count_plus1",
         "has_verified_html_table",
         "factual_numeric_density_score",
-        "writing_structure_score",
+        "writing_structure_score_v3",
+        "has_direct_answer_gemini_v1",
+        "has_definition_gemini_v1",
+        "has_comparison_gemini_v1",
+        "has_steps_gemini_v1",
+        "has_numeric_evidence_gemini_v1",
+        "has_question_heading_gemini_v1",
     ])].copy()
     selected_layer = st.segmented_control(
         "Regression layer",
@@ -1154,25 +1865,36 @@ def _feature_formula(feature_name: str) -> str:
             "min(number_token_per_1000_words / 10, 5) + I(percent_mention_count > 0) + "
             "I(year_mention_count > 0) + I(range_mention_count > 0) + log1p(measurement_mention_count)"
         ),
-        "writing_structure_score": " + ".join(feature_qa.COMPONENTS),
+        "writing_structure_score_v3": (
+            " + ".join(feature_qa.COMPONENTS)
+            + "; Unmeasured unless all five components are measured"
+        ),
     }
     return formulas.get(feature_name, "Binary component: 1 = detected, 0 = not detected, missing = unmeasured")
+
+
+def _feature_label(feature_name: str) -> str:
+    """Keep the UI usable if Streamlit hot-reloads feature names before labels."""
+    return feature_support.FEATURE_LABELS.get(
+        feature_name,
+        feature_name.replace("_", " ").strip().title(),
+    )
 
 
 def _apply_feature_value_filter(frame: pd.DataFrame, feature_name: str, selection: str) -> pd.DataFrame:
     if selection == "All":
         return frame
-    if feature_name == "writing_structure_score":
+    if feature_name == "writing_structure_score_v3":
         score = pd.to_numeric(frame[feature_name], errors="coerce")
         masks = {
             "Score 0": score.eq(0),
             "Score 1-2": score.between(1, 2),
             "Score 3-4": score.between(3, 4),
-            "Score 5-6": score.between(5, 6),
+            "Score 5": score.eq(5),
             "Unmeasured": score.isna(),
         }
         return frame[masks[selection]]
-    if feature_name in {"has_verified_html_table", *feature_qa.COMPONENTS}:
+    if feature_name in feature_support.BINARY_FEATURES:
         states = frame[feature_name].map(feature_qa.nullable_binary_status)
         return frame[states.eq(selection)]
     numeric = pd.to_numeric(frame[feature_name], errors="coerce")
@@ -1392,7 +2114,7 @@ def _feature_distribution_dashboard(
             )
         )
         overall.update_layout(
-            xaxis_title=feature_support.FEATURE_LABELS[selected_feature],
+            xaxis_title=_feature_label(selected_feature),
             yaxis_title="Observations",
             height=410,
             showlegend=False,
@@ -1425,7 +2147,7 @@ def _feature_distribution_dashboard(
         )
         citation.update_layout(
             barmode="group",
-            xaxis_title=feature_support.FEATURE_LABELS[selected_feature],
+            xaxis_title=_feature_label(selected_feature),
             yaxis_title="Observations",
             height=410,
         )
@@ -1461,7 +2183,7 @@ def _feature_distribution_dashboard(
                 points=False,
                 labels={
                     "content_strength": "Extraction Strength",
-                    selected_feature: feature_support.FEATURE_LABELS[selected_feature],
+                    selected_feature: _feature_label(selected_feature),
                 },
             )
             extraction.update_layout(height=410, showlegend=False)
@@ -1507,7 +2229,7 @@ def _feature_distribution_dashboard(
                 )
             extraction.update_layout(
                 barmode="group",
-                xaxis_title=feature_support.FEATURE_LABELS[selected_feature],
+                xaxis_title=_feature_label(selected_feature),
                 yaxis_title="Observations",
                 height=410,
             )
@@ -1551,7 +2273,7 @@ def _feature_distribution_dashboard(
             )
         )
         cited_figure.update_layout(
-            xaxis_title=feature_support.FEATURE_LABELS[selected_feature],
+            xaxis_title=_feature_label(selected_feature),
             yaxis_title="Cited rate (descriptive)",
             yaxis_tickformat=".0%",
             height=410,
@@ -1565,7 +2287,7 @@ def _feature_distribution_dashboard(
             selection_mode="points",
         )
         _record_linked_selection(cited_event, feature=selected_feature)
-        if selected_feature == "writing_structure_score":
+        if selected_feature == "writing_structure_score_v3":
             sparse = selected_bins[selected_bins["n_rows"].between(1, 19)]
             if not sparse.empty:
                 st.warning("One or more observed scores have fewer than 20 rows; cited rates are unstable.")
@@ -1713,7 +2435,7 @@ def _feature_validation(bundle: qa.QABundle) -> None:
         "Compare governed feature values with the stored text used by the producer. Reviews never alter model inputs.",
     )
     repo = Path(__file__).resolve().parents[2]
-    frontend_dir = repo / "outputs/econometrics_redesign_v2_20260722/frontend"
+    frontend_dir = repo / "outputs/econometrics_redesign_v4_20260803_gemini_semantic_features/frontend"
     manifest_path = frontend_dir / "manual_feature_validation_manifest.json"
     if not manifest_path.exists():
         st.warning("The manual feature-validation artifact has not been built.")
@@ -1759,7 +2481,7 @@ def _feature_validation(bundle: qa.QABundle) -> None:
     selected_feature = st.selectbox(
         "Feature to inspect",
         feature_options,
-        format_func=lambda feature: feature_support.FEATURE_LABELS[feature],
+        format_func=_feature_label,
         key=feature_state_key,
     )
     linked_filter = _feature_distribution_dashboard(
@@ -1942,6 +2664,7 @@ def _feature_validation(bundle: qa.QABundle) -> None:
                 ("Scrape status", _binary_result(row.get("scrape_success"), "Success", "Failed")),
                 ("Producer content scope", row.get("feature_extraction_text_scope")),
                 ("Exact source field", row.get("authoritative_content_source")),
+                ("List measurement source", row.get("list_structure_measurement_source")),
                 (
                     "Secondary captured format",
                     "Markdown/body available"
@@ -1962,7 +2685,7 @@ def _feature_validation(bundle: qa.QABundle) -> None:
             ("Original word count", _display_measurement(row.get("word_count"), digits=0)),
             ("Verified HTML Table Presence", feature_qa.nullable_binary_status(row.get("has_verified_html_table"))),
             ("Factual and Numeric Specificity Score", _display_measurement(row.get("factual_numeric_density_score"))),
-            ("Answer-Oriented Writing Structure Score", _display_measurement(row.get("writing_structure_score"), digits=0)),
+            ("Answer-Oriented Writing Structure Score v3", _display_measurement(row.get("writing_structure_score_v3"), digits=0)),
         ]
         st.markdown("##### Active model features")
         st.dataframe(pd.DataFrame(feature_rows, columns=["Feature", "Calculated value"]), width="stretch", hide_index=True)
@@ -1978,9 +2701,13 @@ def _feature_validation(bundle: qa.QABundle) -> None:
             width="stretch",
             hide_index=True,
         )
-        score = _display_measurement(row.get("writing_structure_score"), digits=0)
+        score = _display_measurement(row.get("writing_structure_score_v3"), digits=0)
         component_sum = _display_measurement(row.get("writing_component_sum"), digits=0)
-        st.code(f"writing_structure_score = {score}\nsum(governed components) = {component_sum}")
+        st.code(
+            f"writing_structure_score_v3 = {score}\n"
+            f"sum(governed components) = {component_sum}\n"
+            "missing rule = NA unless all five components are measured"
+        )
         score_match = row.get("writing_score_matches_components")
         if not _not_missing(score_match):
             st.warning("The score/component consistency check is unmeasured.")
@@ -2044,9 +2771,10 @@ def _feature_validation(bundle: qa.QABundle) -> None:
             f"Authoritative feature input: {row.get('authoritative_content_source')} "
             f"({row.get('feature_extraction_text_scope')}). The live page is not authoritative."
         )
-        rendered, raw_text, opening_text, html_preview, original = st.tabs(
+        rendered, structured_lists, raw_text, opening_text, html_preview, original = st.tabs(
             [
                 "Rendered Content",
+                "Structured List Evidence",
                 "Raw Extracted Text",
                 "Opening Text",
                 "HTML Preview",
@@ -2062,9 +2790,38 @@ def _feature_validation(bundle: qa.QABundle) -> None:
                 unsafe_allow_html=True,
             )
             st.caption(
-                "Highlights use the governed producer's list and writing-pattern terms. "
-                "The historical producer did not retain character-level evidence spans."
+                "Highlights show governed writing-pattern and numeric terms. List evidence is "
+                "taken from filtered HTML or generated Markdown and is shown in the next tab."
             )
+        with structured_lists:
+            st.caption(
+                "Canonical list evidence after main-content selection and page-chrome filtering. "
+                "A valid list requires at least two visible, non-empty direct list items."
+            )
+            list_rows = []
+            for feature, evidence_column in (
+                ("has_main_content_unordered_list", "main_content_unordered_list_evidence"),
+                ("has_main_content_ordered_list", "main_content_ordered_list_evidence"),
+            ):
+                raw_evidence = row.get(evidence_column)
+                try:
+                    parsed_evidence = json.loads(str(raw_evidence)) if _not_missing(raw_evidence) else []
+                except json.JSONDecodeError:
+                    parsed_evidence = []
+                list_rows.append(
+                    {
+                        "Feature": feature,
+                        "Measurement": feature_qa.nullable_binary_status(row.get(feature)),
+                        "Detected list evidence": parsed_evidence,
+                    }
+                )
+            st.dataframe(pd.DataFrame(list_rows), width="stretch", hide_index=True)
+            markdown_evidence = row.get("generated_markdown_evidence")
+            if _not_missing(markdown_evidence) and str(markdown_evidence).strip():
+                with st.expander("Generated Markdown used for structural inspection"):
+                    st.code(str(markdown_evidence), language="markdown", wrap_lines=True)
+            else:
+                st.info("No generated Markdown evidence is available for this stored page.")
         with raw_text:
             st.caption(
                 "Exact `url_text_for_features` value used by the writing/factual producer. "

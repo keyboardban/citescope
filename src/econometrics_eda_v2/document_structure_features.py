@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from src.url_utils import root_domain
 
 
-DOCUMENT_STRUCTURE_VERSION = "document_structure_v1"
+DOCUMENT_STRUCTURE_VERSION = "document_structure_v2"
 SNAPSHOT_MODES = ("crawler_api", "browser_api", "unlocker_api")
 WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['.-][A-Za-z0-9]+)*|[\u0E00-\u0E7F]+", re.UNICODE)
 PRICE_ROW_RE = re.compile(
@@ -56,13 +56,16 @@ STRUCTURE_NUMERIC_FEATURES = (
 STRUCTURE_BINARY_FEATURES = (
     "html_available", "text_available", "main_content_available", "structure_features_available",
     "document_features_measurable", "markdown_generated", "has_html_table", "has_heading_hierarchy",
-    "has_paragraph_structure", "has_list_structure", "has_outbound_links", "has_jsonld",
+    "has_paragraph_structure", "has_list_structure", "has_main_content_unordered_list",
+    "has_main_content_ordered_list", "has_outbound_links", "has_jsonld",
     "has_faqpage_schema", "has_article_schema", "has_product_schema", "has_breadcrumb_schema",
     "has_organization_schema", "has_localbusiness_schema",
 )
 STRUCTURE_TEXT_FEATURES = (
     "document_structure_version", "main_content_extraction_method", "external_link_domains",
-    "schema_types", "full_body_text_path", "main_content_text_path", "generated_markdown_path",
+    "schema_types", "list_structure_measurement_source", "main_content_unordered_list_evidence",
+    "main_content_ordered_list_evidence", "full_body_text_path", "main_content_text_path",
+    "generated_markdown_path",
 )
 MODEL_FEATURES = (*STRUCTURE_BINARY_FEATURES, *STRUCTURE_NUMERIC_FEATURES)
 
@@ -189,6 +192,16 @@ def _remove_noise(node: Tag) -> None:
         tag.decompose()
     for tag in list(node.find_all(True)):
         if tag.attrs is None:
+            continue
+        style = str(tag.get("style") or "").replace(" ", "").casefold()
+        if (
+            tag.has_attr("hidden")
+            or tag.has_attr("inert")
+            or str(tag.get("aria-hidden") or "").casefold() == "true"
+            or "display:none" in style
+            or "visibility:hidden" in style
+        ):
+            tag.decompose()
             continue
         role = " ".join(tag.get("role") or []).casefold() if isinstance(tag.get("role"), list) else str(tag.get("role") or "").casefold()
         marker = " ".join(
@@ -324,12 +337,74 @@ def _heading_features(node: Tag) -> dict[str, Any]:
     }
 
 
+def _visible_direct_list_items(list_node: Tag) -> list[str]:
+    items: list[str] = []
+    for item in list_node.find_all("li", recursive=False):
+        if item.attrs is None:
+            continue
+        style = str(item.get("style") or "").replace(" ", "").casefold()
+        if (
+            item.has_attr("hidden")
+            or item.has_attr("inert")
+            or str(item.get("aria-hidden") or "").casefold() == "true"
+            or "display:none" in style
+            or "visibility:hidden" in style
+        ):
+            continue
+        clone = BeautifulSoup(str(item), "html.parser")
+        for nested in clone.find_all(["ul", "ol"]):
+            nested.decompose()
+        text = re.sub(r"\s+", " ", clone.get_text(" ", strip=True)).strip()
+        if text:
+            items.append(text)
+    return items
+
+
+def _valid_html_lists(node: Tag, list_tag: str) -> list[list[str]]:
+    valid: list[list[str]] = []
+    for candidate in node.find_all(list_tag):
+        items = _visible_direct_list_items(candidate)
+        if len(items) >= 2:
+            valid.append(items)
+    return valid
+
+
+def _markdown_list_evidence(markdown: str, ordered: bool) -> list[list[str]]:
+    pattern = (
+        re.compile(r"^\s{0,3}\d+[.)]\s+(.+?)\s*$")
+        if ordered
+        else re.compile(r"^\s{0,3}[-*+]\s+(.+?)\s*$")
+    )
+    groups: list[list[str]] = []
+    current: list[str] = []
+    for line in str(markdown or "").splitlines():
+        match = pattern.match(line)
+        if match and match.group(1).strip():
+            current.append(match.group(1).strip())
+            continue
+        if len(current) >= 2:
+            groups.append(current)
+        current = []
+    if len(current) >= 2:
+        groups.append(current)
+    return groups
+
+
+def _evidence_json(groups: list[list[str]], max_lists: int = 3, max_items: int = 5) -> str:
+    return json.dumps(
+        [items[:max_items] for items in groups[:max_lists]],
+        ensure_ascii=False,
+    )
+
+
 def _paragraph_list_features(node: Tag) -> dict[str, Any]:
     paragraphs = [p.get_text(" ", strip=True) for p in node.find_all("p")]
     lengths = [len(_words(text)) for text in paragraphs if _words(text)]
     unordered = node.find_all("ul")
     ordered = node.find_all("ol")
     items = node.find_all("li")
+    valid_unordered = _valid_html_lists(node, "ul")
+    valid_ordered = _valid_html_lists(node, "ol")
     depths = [sum(parent.name in {"ul", "ol"} for parent in item.parents) for item in items]
     return {
         "paragraph_count": len(lengths),
@@ -340,6 +415,11 @@ def _paragraph_list_features(node: Tag) -> dict[str, Any]:
         "unordered_list_count": len(unordered), "ordered_list_count": len(ordered),
         "list_item_count": len(items), "max_list_depth": max(depths, default=0),
         "has_paragraph_structure": int(bool(lengths)), "has_list_structure": int(bool(items)),
+        "has_main_content_unordered_list": int(bool(valid_unordered)),
+        "has_main_content_ordered_list": int(bool(valid_ordered)),
+        "list_structure_measurement_source": "filtered_main_content_html",
+        "main_content_unordered_list_evidence": _evidence_json(valid_unordered),
+        "main_content_ordered_list_evidence": _evidence_json(valid_ordered),
     }
 
 
@@ -372,21 +452,49 @@ def _link_features(node: Tag, source_url: str) -> dict[str, Any]:
     }
 
 
-def extract_document_structure(html: str, source_url: str, fallback_text: str = "") -> tuple[dict[str, Any], dict[str, str]]:
+def extract_document_structure(
+    html: str,
+    source_url: str,
+    fallback_text: str = "",
+    fallback_markdown: str = "",
+) -> tuple[dict[str, Any], dict[str, str]]:
     """Extract structure features plus full-text audit artifacts from one page."""
     html = str(html or "")
     fallback_text = _clean_lines(str(fallback_text or ""))
+    fallback_markdown = _clean_lines(str(fallback_markdown or ""))
     if not html.strip():
         features: dict[str, Any] = {name: np.nan for name in STRUCTURE_NUMERIC_FEATURES}
         features.update({name: 0 for name in STRUCTURE_BINARY_FEATURES})
         features.update({name: "" for name in STRUCTURE_TEXT_FEATURES})
+        unordered = _markdown_list_evidence(fallback_markdown, ordered=False)
+        ordered = _markdown_list_evidence(fallback_markdown, ordered=True)
+        structured_markdown_available = bool(fallback_markdown.strip())
         features.update({
             "document_structure_version": DOCUMENT_STRUCTURE_VERSION,
             "text_available": int(bool(fallback_text)),
             "main_content_available": int(bool(fallback_text)),
-            "main_content_extraction_method": "text_fallback" if fallback_text else "unavailable",
+            "main_content_extraction_method": (
+                "generated_markdown_fallback"
+                if structured_markdown_available
+                else ("text_fallback_unmeasured" if fallback_text else "unavailable")
+            ),
+            "has_main_content_unordered_list": (
+                int(bool(unordered)) if structured_markdown_available else np.nan
+            ),
+            "has_main_content_ordered_list": (
+                int(bool(ordered)) if structured_markdown_available else np.nan
+            ),
+            "list_structure_measurement_source": (
+                "generated_markdown_fallback" if structured_markdown_available else "unmeasured"
+            ),
+            "main_content_unordered_list_evidence": _evidence_json(unordered),
+            "main_content_ordered_list_evidence": _evidence_json(ordered),
         })
-        return features, {"full_body_text": fallback_text, "main_content_text": fallback_text, "generated_markdown": ""}
+        return features, {
+            "full_body_text": fallback_text,
+            "main_content_text": fallback_text,
+            "generated_markdown": fallback_markdown,
+        }
 
     soup = BeautifulSoup(html, "html.parser")
     schema = _schema_features(soup)
@@ -488,7 +596,10 @@ def run_document_structure_layer(package_dir: Path, snapshot_root: Path, output_
             snapshot_path = _snapshot_path(source_url, snapshot_root)
             snapshot = json.loads(snapshot_path.read_text("utf-8")) if snapshot_path else {}
             features, texts = extract_document_structure(
-                str(snapshot.get("html") or ""), source_url, str(snapshot.get("text") or "")
+                str(snapshot.get("html") or ""),
+                source_url,
+                str(snapshot.get("text") or ""),
+                str(snapshot.get("markdown") or ""),
             )
             key = _snapshot_key(source_url)
             full_path = text_dir / f"{key}_full.txt"
@@ -543,11 +654,55 @@ def run_document_structure_layer(package_dir: Path, snapshot_root: Path, output_
         ("urls_with_jsonld", int(features.has_jsonld.sum()), "count"),
         ("urls_with_faqpage_schema", int(features.has_faqpage_schema.sum()), "count"),
         ("urls_with_outbound_links", int(features.has_outbound_links.sum()), "count"),
+        (
+            "urls_with_main_content_unordered_list",
+            int(pd.to_numeric(features.has_main_content_unordered_list, errors="coerce").eq(1).sum()),
+            "count",
+        ),
+        (
+            "urls_with_main_content_ordered_list",
+            int(pd.to_numeric(features.has_main_content_ordered_list, errors="coerce").eq(1).sum()),
+            "count",
+        ),
+        (
+            "urls_unmeasured_main_content_lists",
+            int(pd.to_numeric(features.has_main_content_unordered_list, errors="coerce").isna().sum()),
+            "count",
+        ),
         ("html_availability_rate", float(features.html_available.mean()), "rate"),
         ("document_measurable_rate", float(features.document_features_measurable.mean()), "rate"),
     ]
     summary = pd.DataFrame(summary_rows, columns=["metric", "value", "value_type"])
     summary.to_csv(output_dir / "document_structure_coverage_summary.csv", index=False)
+
+    list_columns = [
+        "normalized_url", "source_url", "source_root_domain", "html_available",
+        "main_content_extraction_method", "list_structure_measurement_source",
+        "has_main_content_unordered_list", "has_main_content_ordered_list",
+        "main_content_unordered_list_evidence", "main_content_ordered_list_evidence",
+        "generated_markdown_path", "snapshot_path",
+    ]
+    features[[column for column in list_columns if column in features]].to_csv(
+        output_dir / "structured_list_detection_diagnostics.csv",
+        index=False,
+    )
+    representative_groups: list[pd.DataFrame] = []
+    unordered_numeric = pd.to_numeric(features["has_main_content_unordered_list"], errors="coerce")
+    ordered_numeric = pd.to_numeric(features["has_main_content_ordered_list"], errors="coerce")
+    sample_specs = (
+        ("unordered_positive", unordered_numeric.eq(1)),
+        ("ordered_positive", ordered_numeric.eq(1)),
+        ("measured_negative", unordered_numeric.eq(0) & ordered_numeric.eq(0)),
+        ("unmeasured", unordered_numeric.isna() | ordered_numeric.isna()),
+    )
+    for reason, mask in sample_specs:
+        sample = features.loc[mask, [column for column in list_columns if column in features]].head(5).copy()
+        sample.insert(0, "review_reason", reason)
+        representative_groups.append(sample)
+    pd.concat(representative_groups, ignore_index=True).to_csv(
+        output_dir / "structured_list_manual_review_sample.csv",
+        index=False,
+    )
 
     numeric_summary = features[list(STRUCTURE_NUMERIC_FEATURES)].describe(percentiles=[.5, .9, .95, .99]).T.reset_index(names="feature")
     numeric_summary.to_csv(output_dir / "document_structure_numeric_summary.csv", index=False)
@@ -587,10 +742,13 @@ def run_document_structure_layer(package_dir: Path, snapshot_root: Path, output_
 - JSON-LD: {int(features.has_jsonld.sum()):,}
 - FAQPage schema: {int(features.has_faqpage_schema.sum()):,}
 - Outbound links: {int(features.has_outbound_links.sum()):,}
+- Valid main-content unordered lists: {int(pd.to_numeric(features.has_main_content_unordered_list, errors="coerce").eq(1).sum()):,}
+- Valid main-content ordered lists: {int(pd.to_numeric(features.has_main_content_ordered_list, errors="coerce").eq(1).sum()):,}
+- Unmeasured main-content list structure: {int(pd.to_numeric(features.has_main_content_unordered_list, errors="coerce").isna().sum()):,}
 
 ## Interpretation boundary
 
-The full body and generated Markdown are audit evidence, not direct LPM predictors. Structural values are missing when HTML is unavailable; absence is not imputed as zero. Price, unit-size, comparison-row, and FAQ-schema measures are sensitivity candidates. Existing notebook 10 and 11 outputs remain frozen.
+The full body and generated Markdown are audit evidence, not direct LPM predictors. Main-content list indicators use filtered HTML first and generated Markdown only when HTML is unavailable. A list requires at least two visible, non-empty direct items. When neither structured source is available, list values are `NA`; absence is not imputed as zero. Price, unit-size, comparison-row, and FAQ-schema measures are sensitivity candidates. Existing notebook 10 and 11 outputs remain frozen.
 
 ## Next step
 

@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.econometrics_eda_v2.redesigned_pipeline_v2 import FOCAL, formulas, validate_formula_scope
+from src.econometrics_eda_v2.redesigned_pipeline_v2 import (
+    CORE_FOCAL,
+    FOCAL,
+    GEMINI_SEMANTIC_FOCAL,
+    attach_gemini_semantic_features,
+    formulas,
+    validate_formula_scope,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,9 +28,18 @@ def test_formulas_enforce_feature_scope_and_separate_branches():
     validate_formula_scope(model_formulas)
     assert set(key for key in model_formulas if key.startswith("FE1_")) == {f"FE1_{x}" for x in FOCAL}
     joined = " ".join(model_formulas.values())
+    assert "writing_structure_score_v3" in joined
+    assert "writing_structure_score_v2" not in joined
+    assert "has_question_answer_structure" not in joined
+    assert "has_bullet_list" not in joined
+    assert "has_numbered_list" not in joined
     assert "heading_count" not in joined
     assert "has_table" not in joined
     assert "external_evidence" not in joined
+    assert set(CORE_FOCAL).issubset(FOCAL)
+    assert set(GEMINI_SEMANTIC_FOCAL).issubset(FOCAL)
+    assert "position_ratio_gemini" not in joined
+    assert "_count_gemini" not in joined
     assert "content_strength" not in " ".join(model_formulas[key] for key in model_formulas if key.startswith("FE1_"))
     assert "source_root_domain" in model_formulas["FE3"]
     assert "source_root_domain" not in model_formulas["FE4"]
@@ -45,7 +61,7 @@ def test_precomputed_frontend_manifest_matches_completed_outputs():
     import hashlib
     import json
 
-    frontend = ROOT / "outputs/econometrics_redesign_v2_20260722/frontend"
+    frontend = ROOT / "outputs/econometrics_redesign_v4_20260803_gemini_semantic_features/frontend"
     manifest = json.loads((frontend / "manifest.json").read_text())
     assert manifest["layers"] == ["D0", "FE1", "FE2", "FE3", "FE4"]
     assert manifest["validated"] is True
@@ -58,3 +74,25 @@ def test_verified_table_preserves_measured_absence_and_unmeasured_semantics():
     assert 'dtype="Int64"' in source
     assert 'html_measured' in source
     assert 'merged.loc[html_measured, "has_verified_html_table"]' in source
+
+
+def test_gemini_semantic_join_preserves_unmeasured_as_na(tmp_path):
+    semantic = pd.DataFrame(
+        {
+            "normalized_url": ["https://measured.test", "https://failed.test"],
+            "gemini_status": ["success", "partial_failure"],
+            **{
+                feature: [1, 0]
+                for feature in GEMINI_SEMANTIC_FOCAL
+            },
+        }
+    )
+    path = tmp_path / "semantic.csv"
+    semantic.to_csv(path, index=False)
+    source = pd.DataFrame(
+        {"normalized_url": ["https://measured.test", "https://failed.test", "https://missing.test"]}
+    )
+    result = attach_gemini_semantic_features(source, path).set_index("normalized_url")
+    assert result.loc["https://measured.test", GEMINI_SEMANTIC_FOCAL].eq(1).all()
+    assert result.loc["https://failed.test", GEMINI_SEMANTIC_FOCAL].isna().all()
+    assert result.loc["https://missing.test", GEMINI_SEMANTIC_FOCAL].isna().all()

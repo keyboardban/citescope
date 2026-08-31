@@ -20,6 +20,14 @@ from .econometrics_eda_v2.general_page_taxonomy import (
     classify_general_site_type,
     finalise_general_page_type,
 )
+from .econometrics_eda_v2.position_model import (
+    PAGE_TYPE_MODEL_6_MAP,
+    POSITION_MODEL_VERSION,
+    SOURCE_TYPE_MODEL_6_MAP,
+    _collapse_page_type_for_model,
+    _collapse_source_type_for_model,
+    _domain_source_type_assignments,
+)
 
 
 PACKAGE_NAME = "content_econometrics_ai_package"
@@ -28,6 +36,7 @@ SNAPSHOT_MODES = ("crawler_api", "browser_api", "unlocker_api")
 GEMINI_TAXONOMY_RELATIVE_PATH = Path(
     "tables/gemini_page_taxonomy_batch/all_pages_gemini_taxonomy_classifications.csv"
 )
+QA_TAXONOMY_CACHE_VERSION = f"{GENERAL_TAXONOMY_VERSION}+{POSITION_MODEL_VERSION}"
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,76 @@ def add_gemini_taxonomy(
     return out.merge(attached, on="normalized_url", how="left", validate="one_to_one")
 
 
+def _first_available_label(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    result = pd.Series(pd.NA, index=frame.index, dtype="object")
+    for column in columns:
+        if column not in frame:
+            continue
+        values = frame[column].astype("object")
+        valid = values.notna() & values.astype(str).str.strip().ne("")
+        result = result.where(result.notna(), values.where(valid))
+    return result.fillna("unknown").astype(str)
+
+
+def add_governed_taxonomy_6(evidence: pd.DataFrame) -> pd.DataFrame:
+    """Attach the approved six-class model controls while preserving detailed labels."""
+    required = {"normalized_url", "source_root_domain"}
+    missing = sorted(required - set(evidence.columns))
+    if missing:
+        raise ValueError(f"Taxonomy evidence is missing required columns: {', '.join(missing)}")
+
+    out = evidence.copy()
+    out["page_type_detailed"] = _first_available_label(
+        out,
+        (
+            "llm_page_type_family_general",
+            "page_type_family_general_rule_v2",
+            "page_type_family_general",
+        ),
+    )
+    out["page_type_model_6"] = _collapse_page_type_for_model(
+        out["page_type_detailed"]
+    )
+    out["source_type_detailed"] = _first_available_label(
+        out,
+        ("llm_site_type_general", "site_type_general_rule_v2", "site_type_general"),
+    )
+    out["source_type_row_collapsed"] = _collapse_source_type_for_model(
+        out["source_type_detailed"]
+    )
+
+    assignments = _domain_source_type_assignments(out).rename(
+        columns={
+            "dominant_source_type_before_tie_rule": "source_type_domain_dominant_label_before_tie",
+            "dominant_url_share": "source_type_domain_dominant_url_share",
+            "top_class_tie": "source_type_domain_top_class_tie",
+            "low_confidence_below_60pct": "source_type_domain_low_confidence",
+            "domain_unique_urls": "source_type_domain_unique_urls",
+            "domain_class_count": "source_type_domain_class_count",
+            "candidate_summary": "source_type_domain_candidate_summary",
+        }
+    )
+    out = out.merge(assignments, on="source_root_domain", how="left", validate="many_to_one")
+    out["source_type_model_6"] = out["source_type_model_6"].fillna(
+        out["source_type_row_collapsed"]
+    )
+    out["taxonomy_model_version"] = POSITION_MODEL_VERSION
+    return out
+
+
+def governed_taxonomy_mapping_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return readable detailed-to-model mapping tables for the QA frontend."""
+    page = pd.DataFrame(
+        sorted(PAGE_TYPE_MODEL_6_MAP.items()),
+        columns=["detailed_page_family", "page_type_model_6"],
+    )
+    source = pd.DataFrame(
+        sorted(SOURCE_TYPE_MODEL_6_MAP.items()),
+        columns=["detailed_source_type", "source_type_row_collapsed"],
+    )
+    return page, source
+
+
 def load_bundle(
     package_dir: str | Path | None = None,
     prompt_manifest_path: str | Path | None = None,
@@ -180,6 +259,7 @@ def load_bundle(
     )
     gemini = pd.read_csv(gemini_path, low_memory=False) if gemini_path.exists() else None
     url_evidence = add_gemini_taxonomy(url_evidence, gemini)
+    url_evidence = add_governed_taxonomy_6(url_evidence)
     return QABundle(
         package_dir=package,
         manifest=manifest,

@@ -27,13 +27,41 @@ def test_writing_structure_score_equals_governed_component_sum():
             dict(
                 zip(
                     feature_qa.COMPONENTS,
-                    [1, 0, 1, 1, 0, 1],
+                    [1, 0, 1, 1, 1],
                 )
             )
         ]
     )
 
     assert feature_qa.writing_component_sum(frame).iloc[0] == 4
+
+
+def test_writing_structure_score_v3_preserves_missing_components():
+    frame = pd.DataFrame(
+        [dict(zip(feature_qa.COMPONENTS, [1, pd.NA, 1, 0, 1]))]
+    )
+
+    scored = feature_qa.attach_writing_structure_score_v3(frame)
+
+    assert pd.isna(scored.loc[0, "writing_structure_score_v3"])
+    assert scored.loc[0, "writing_structure_components_measured_n"] == 4
+    assert scored.loc[0, "writing_structure_score_v3_available"] == 0
+
+
+def test_writing_structure_score_v3_ignores_superseded_qa_detector():
+    frame = pd.DataFrame(
+        [
+            {
+                **dict.fromkeys(feature_qa.COMPONENTS, 0),
+                "has_question_answer_structure": 1,
+            }
+        ]
+    )
+
+    scored = feature_qa.attach_writing_structure_score_v3(frame)
+
+    assert scored.loc[0, "writing_structure_score_v3"] == 0
+    assert "has_question_answer_structure" not in feature_qa.COMPONENTS
 
 
 def test_factual_numeric_score_equals_governed_component_sum():
@@ -94,7 +122,7 @@ def test_manual_review_is_append_only_and_does_not_modify_feature_file(tmp_path)
     feature_file = tmp_path / "features.csv"
     review_file = tmp_path / "manual_feature_validation_reviews.csv"
     pd.DataFrame(
-        [{"normalized_url": "https://example.com/page", "writing_structure_score": 2}]
+        [{"normalized_url": "https://example.com/page", "writing_structure_score_v3": 2}]
     ).to_csv(feature_file, index=False)
     before = _sha256(feature_file)
 
@@ -103,7 +131,7 @@ def test_manual_review_is_append_only_and_does_not_modify_feature_file(tmp_path)
         {
             "normalized_url": "https://example.com/page",
             "prompt_id": "prompt-1",
-            "feature_name": "writing_structure_score",
+            "feature_name": "writing_structure_score_v3",
             "automated_value": 2,
             "reviewer_decision": "incorrect",
             "error_type": "formatting lost",
