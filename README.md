@@ -18,6 +18,7 @@ sources, not causal effects or web-wide citation probabilities.
 | find your way around 25 documents | [`docs/README.md`](docs/README.md) |
 | know what changed or was superseded | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | run something | [Setup](#setup), then [Validate and run](#validate-and-run) |
+| give this to someone else to run | [`REPRODUCING.md`](REPRODUCING.md) — exactly which data files they need |
 | interpret an estimate | [Econometric guardrails](#econometric-guardrails) — read before quoting numbers |
 
 Two model families live here and are deliberately kept apart: the **governed
